@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ExpenseAssistant.App",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build ExpenseAssistant.App",
+      "program": "${workspaceFolder}/src/ExpenseAssistant.App/bin/Debug/net10.0/ExpenseAssistant.App.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/src/ExpenseAssistant.App",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ]
+}

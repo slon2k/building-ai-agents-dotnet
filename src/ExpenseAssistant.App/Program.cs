@@ -14,4 +14,4 @@ AzureOpenAIOptions options = configuration
 
 options.Validate();
 
-await RawAzureOpenAIExample.RunAsync(options);
+await AzureOpenAIChatExample.RunAsync(options);
