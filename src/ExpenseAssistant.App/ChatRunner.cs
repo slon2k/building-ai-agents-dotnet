@@ -3,10 +3,8 @@ using Microsoft.Extensions.AI;
 
 namespace ExpenseAssistant.App;
 
-internal sealed class ChatRunner(IChatClient chatClient, TimeSpan requestTimeout)
+internal sealed class ChatRunner(IChatClient chatClient, TimeSpan requestTimeout, string systemPrompt)
 {
-    public const string SystemPrompt = "Help users understand expense questions. Do not invent transactions or claim access to data that was not supplied.";
-
     public Guid SessionId { get; } = Guid.NewGuid();
 
     public async Task<ChatRunResult> RunAsync(string userInput, CancellationToken cancellationToken)
@@ -21,7 +19,7 @@ internal sealed class ChatRunner(IChatClient chatClient, TimeSpan requestTimeout
         {
             ChatResponse response = await chatClient.GetResponseAsync(
                 [
-                    new(ChatRole.System, SystemPrompt),
+                    new(ChatRole.System, systemPrompt),
                     new(ChatRole.User, userInput)
                 ],
                 cancellationToken: timeoutCts.Token);

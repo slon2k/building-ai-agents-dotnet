@@ -26,7 +26,10 @@ AssistantOptions assistantOptions = configuration
 assistantOptions.Validate();
 
 IChatClient chatClient = AzureOpenAIChatClientFactory.Create(options);
-var runner = new ChatRunner(chatClient, TimeSpan.FromSeconds(assistantOptions.RequestTimeoutSeconds));
+var runner = new ChatRunner(
+	chatClient,
+	TimeSpan.FromSeconds(assistantOptions.RequestTimeoutSeconds),
+	assistantOptions.SystemPrompt);
 
 Console.WriteLine($"Session: {runner.SessionId}");
 Console.WriteLine("Ask an expense question. Press Esc to cancel a request, type 'exit' to quit.");

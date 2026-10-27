@@ -6,6 +6,10 @@ namespace ExpenseAssistant.Tests;
 public class ChatRunnerTests
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    private const string TestSystemPrompt = "Test assistant instructions.";
+
+    private static ChatRunner CreateRunner(IChatClient chatClient, TimeSpan? timeout = null) =>
+        new(chatClient, timeout ?? DefaultTimeout, TestSystemPrompt);
 
     private static FakeChatClient Replying(string text, UsageDetails? usage = null) =>
         new((_, _) => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text)) { Usage = usage }));
@@ -21,19 +25,19 @@ public class ChatRunnerTests
     public async Task RunAsync_SendsSystemInstructionAndUserInputAsSeparateMessages()
     {
         var client = Replying("ok");
-        var runner = new ChatRunner(client, DefaultTimeout);
+        var runner = CreateRunner(client);
 
         await runner.RunAsync("How much did I spend?", CancellationToken.None);
 
         Assert.Collection(client.ReceivedMessages,
-            m => { Assert.Equal(ChatRole.System, m.Role); Assert.Equal(ChatRunner.SystemPrompt, m.Text); },
+            m => { Assert.Equal(ChatRole.System, m.Role); Assert.Equal(TestSystemPrompt, m.Text); },
             m => { Assert.Equal(ChatRole.User, m.Role); Assert.Equal("How much did I spend?", m.Text); });
     }
 
     [Fact]
     public async Task RunAsync_WhenSuccessful_ReturnsCompletedResultWithIdsAndResponse()
     {
-        var runner = new ChatRunner(Replying("hello"), DefaultTimeout);
+        var runner = CreateRunner(Replying("hello"));
 
         ChatRunResult result = await runner.RunAsync("hi", CancellationToken.None);
 
@@ -47,7 +51,7 @@ public class ChatRunnerTests
     [Fact]
     public async Task RunAsync_WhenCalledTwice_ReusesSessionIdAndCreatesDistinctRunIds()
     {
-        var runner = new ChatRunner(Replying("ok"), DefaultTimeout);
+        var runner = CreateRunner(Replying("ok"));
 
         ChatRunResult first = await runner.RunAsync("a", CancellationToken.None);
         ChatRunResult second = await runner.RunAsync("b", CancellationToken.None);
@@ -59,7 +63,7 @@ public class ChatRunnerTests
     [Fact]
     public async Task RunAsync_WhenUsageIsMissing_LeavesUsageUnknown()
     {
-        var runner = new ChatRunner(Replying("ok", usage: null), DefaultTimeout);
+        var runner = CreateRunner(Replying("ok", usage: null));
 
         ChatRunResult result = await runner.RunAsync("hi", CancellationToken.None);
 
@@ -70,7 +74,7 @@ public class ChatRunnerTests
     [Fact]
     public async Task RunAsync_WhenCallerCancels_ReturnsCancelled()
     {
-        var runner = new ChatRunner(WaitingForCancellation(), DefaultTimeout);
+        var runner = CreateRunner(WaitingForCancellation());
         using var cts = new CancellationTokenSource();
 
         Task<ChatRunResult> runTask = runner.RunAsync("hi", cts.Token);
@@ -84,7 +88,7 @@ public class ChatRunnerTests
     [Fact]
     public async Task RunAsync_WhenRequestExceedsTimeout_ReturnsTimedOut()
     {
-        var runner = new ChatRunner(WaitingForCancellation(), TimeSpan.FromMilliseconds(50));
+        var runner = CreateRunner(WaitingForCancellation(), TimeSpan.FromMilliseconds(50));
 
         ChatRunResult result = await runner.RunAsync("hi", CancellationToken.None);
 
@@ -96,7 +100,7 @@ public class ChatRunnerTests
     public async Task RunAsync_WhenClientThrows_ReturnsFailureResult()
     {
         var client = new FakeChatClient((_, _) => throw new HttpRequestException("Service unavailable"));
-        var runner = new ChatRunner(client, DefaultTimeout);
+        var runner = CreateRunner(client);
 
         ChatRunResult result = await runner.RunAsync("hi", CancellationToken.None);
 
