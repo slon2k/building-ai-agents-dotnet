@@ -58,8 +58,8 @@ while (true)
 	try
 	{
 		ChatResponse response = await responseTask;
-		Console.WriteLine($"Assistant: {response.Text}");
-		Console.WriteLine($"Finish reason: {response.FinishReason}");
+		response.PrintResponse();
+		response.PrintMetadata();
 	}
 	catch (OperationCanceledException) when (cts.IsCancellationRequested)
 	{
