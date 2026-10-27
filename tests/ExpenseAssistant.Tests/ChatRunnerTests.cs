@@ -18,7 +18,7 @@ public class ChatRunnerTests
         });
 
     [Fact]
-    public async Task Sends_system_instruction_and_user_input_as_separate_messages()
+    public async Task RunAsync_SendsSystemInstructionAndUserInputAsSeparateMessages()
     {
         var client = Replying("ok");
         var runner = new ChatRunner(client, DefaultTimeout);
@@ -31,7 +31,7 @@ public class ChatRunnerTests
     }
 
     [Fact]
-    public async Task Completed_run_carries_session_run_and_response()
+    public async Task RunAsync_WhenSuccessful_ReturnsCompletedResultWithIdsAndResponse()
     {
         var runner = new ChatRunner(Replying("hello"), DefaultTimeout);
 
@@ -45,7 +45,7 @@ public class ChatRunnerTests
     }
 
     [Fact]
-    public async Task Runs_in_one_session_share_session_id_but_get_distinct_run_ids()
+    public async Task RunAsync_WhenCalledTwice_ReusesSessionIdAndCreatesDistinctRunIds()
     {
         var runner = new ChatRunner(Replying("ok"), DefaultTimeout);
 
@@ -57,7 +57,7 @@ public class ChatRunnerTests
     }
 
     [Fact]
-    public async Task Missing_usage_metadata_is_left_unknown()
+    public async Task RunAsync_WhenUsageIsMissing_LeavesUsageUnknown()
     {
         var runner = new ChatRunner(Replying("ok", usage: null), DefaultTimeout);
 
@@ -68,7 +68,7 @@ public class ChatRunnerTests
     }
 
     [Fact]
-    public async Task Caller_cancellation_is_propagated_and_reported_as_cancelled()
+    public async Task RunAsync_WhenCallerCancels_ReturnsCancelled()
     {
         var runner = new ChatRunner(WaitingForCancellation(), DefaultTimeout);
         using var cts = new CancellationTokenSource();
@@ -82,7 +82,7 @@ public class ChatRunnerTests
     }
 
     [Fact]
-    public async Task Exceeding_the_timeout_is_reported_as_timed_out()
+    public async Task RunAsync_WhenRequestExceedsTimeout_ReturnsTimedOut()
     {
         var runner = new ChatRunner(WaitingForCancellation(), TimeSpan.FromMilliseconds(50));
 
@@ -93,7 +93,7 @@ public class ChatRunnerTests
     }
 
     [Fact]
-    public async Task Client_failure_is_reported_without_throwing()
+    public async Task RunAsync_WhenClientThrows_ReturnsFailureResult()
     {
         var client = new FakeChatClient((_, _) => throw new HttpRequestException("Service unavailable"));
         var runner = new ChatRunner(client, DefaultTimeout);
