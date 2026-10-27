@@ -1,9 +1,9 @@
 using System.Diagnostics;
 using Microsoft.Extensions.AI;
 
-namespace ExpenseAssistant.App;
+namespace ExpenseAssistant.Core;
 
-internal sealed class ChatRunner(IChatClient chatClient, TimeSpan requestTimeout, string systemPrompt)
+public sealed class ChatRunner(IChatClient chatClient, TimeSpan requestTimeout, string systemPrompt)
 {
     public Guid SessionId { get; } = Guid.NewGuid();
 

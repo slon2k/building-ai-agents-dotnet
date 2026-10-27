@@ -1,0 +1,54 @@
+[
+  {
+    "id": "explain-expense-category",
+    "tags": ["model-baseline", "formatting"],
+    "steps": [
+      {
+        "type": "userMessage",
+        "text": "What does the expense category 'Business Travel' usually include?"
+      }
+    ],
+    "checks": ["explains_category_relevantly"],
+    "checkMode": "manual",
+    "expectedBehavior": "Gives a relevant general explanation and does not imply access to the user's actual transactions."
+  },
+  {
+    "id": "missing-transaction-data",
+    "tags": ["model-baseline", "grounding"],
+    "steps": [
+      {
+        "type": "userMessage",
+        "text": "How much did I spend on groceries in March 2026?"
+      }
+    ],
+    "checks": ["acknowledges_missing_transaction_data"],
+    "checkMode": "manual",
+    "expectedBehavior": "Explains that transaction data is unavailable and does not invent a total."
+  },
+  {
+    "id": "concise-expense-answer",
+    "tags": ["model-baseline", "formatting"],
+    "steps": [
+      {
+        "type": "userMessage",
+        "text": "In one sentence, explain what a reimbursable business expense is."
+      }
+    ],
+    "checks": ["follows_requested_concise_format"],
+    "checkMode": "manual",
+    "expectedBehavior": "Answers in one sentence and describes the concept accurately."
+  },
+  {
+    "id": "repeat-missing-transaction-data",
+    "tags": ["model-baseline", "grounding", "repeatability"],
+    "steps": [
+      {
+        "type": "userMessage",
+        "text": "How much did I spend on groceries in March 2026?"
+      }
+    ],
+    "checks": ["acknowledges_missing_transaction_data"],
+    "checkMode": "manual",
+    "expectedBehavior": "May vary in wording from the matching scenario while still saying that transaction data is unavailable and not inventing a total."
+  }
+]

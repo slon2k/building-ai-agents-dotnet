@@ -1,4 +1,6 @@
 ﻿using ExpenseAssistant.App;
+using ExpenseAssistant.Core;
+using ExpenseAssistant.Infrastructure;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using System.Text;
@@ -9,7 +11,7 @@ Console.OutputEncoding = Encoding.UTF8;
 IConfiguration configuration = new ConfigurationBuilder()
 	.SetBasePath(AppContext.BaseDirectory)
 	.AddJsonFile("appsettings.json", optional: true)
-	.AddUserSecrets<AzureOpenAIOptions>(optional: true)
+	.AddUserSecrets<Program>(optional: true)
 	.AddEnvironmentVariables()
 	.Build();
 

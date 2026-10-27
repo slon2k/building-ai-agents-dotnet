@@ -1,6 +1,6 @@
-namespace ExpenseAssistant.App;
+namespace ExpenseAssistant.Infrastructure;
 
-internal sealed class AzureOpenAIOptions
+public sealed class AzureOpenAIOptions
 {
     public const string SectionName = "AzureOpenAI";
 

@@ -1,8 +1,8 @@
 using Microsoft.Extensions.AI;
 
-namespace ExpenseAssistant.App;
+namespace ExpenseAssistant.Core;
 
-internal enum ChatRunStatus
+public enum ChatRunStatus
 {
     Completed,
     Cancelled,
@@ -10,7 +10,7 @@ internal enum ChatRunStatus
     Failed
 }
 
-internal sealed record ChatRunResult(
+public sealed record ChatRunResult(
     Guid SessionId,
     Guid RunId,
     ChatRunStatus Status,

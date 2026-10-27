@@ -1,4 +1,4 @@
-using ExpenseAssistant.App;
+using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
 
 namespace ExpenseAssistant.Tests;

@@ -1,3 +1,4 @@
+using ExpenseAssistant.Infrastructure;
 using Microsoft.Extensions.AI;
 
 namespace ExpenseAssistant.App;

@@ -3,9 +3,9 @@ using OpenAI;
 using OpenAI.Chat;
 using System.ClientModel;
 
-namespace ExpenseAssistant.App;
+namespace ExpenseAssistant.Infrastructure;
 
-internal static class AzureOpenAIChatClientFactory
+public static class AzureOpenAIChatClientFactory
 {
     public static IChatClient Create(AzureOpenAIOptions options)
     {
