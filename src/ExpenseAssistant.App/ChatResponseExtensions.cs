@@ -13,7 +13,7 @@ internal static class ChatResponseExtensions
     {
         Console.WriteLine($"Finish reason: {response.FinishReason}");
 
-        if (response.Usage is {} usage)
+        if (response.Usage is { } usage)
         {
             Console.WriteLine(
                 $"Usage: input={FormatTokenCount(usage.InputTokenCount)}, " +

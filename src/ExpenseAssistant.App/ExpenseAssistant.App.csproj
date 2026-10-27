@@ -21,4 +21,8 @@
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="ExpenseAssistant.Tests" />
+  </ItemGroup>
+
 </Project>
