@@ -105,14 +105,157 @@ public class ExpenseToolsTests
         Assert.True(summary.CategoryTotals.Count > 1);
     }
 
+    [Theory]
+    [InlineData("SearchTransactions", "endDate", "2026-03-01", "INVALID_DATE_RANGE")]
+    [InlineData("GetSpendingSummary", "endDate", "2026-02-01", "INVALID_DATE_RANGE")]
+    [InlineData("SearchTransactions", "categoryId", " ", "INVALID_CATEGORY")]
+    [InlineData("GetSpendingSummary", "categoryId", "", "INVALID_CATEGORY")]
+    [InlineData("SearchTransactions", "categoryId", "unknown", "INVALID_CATEGORY")]
+    [InlineData("GetSpendingSummary", "categoryId", "unknown", "INVALID_CATEGORY")]
+    [InlineData("SearchTransactions", "merchantText", " ", "INVALID_MERCHANT")]
+    [InlineData("SearchTransactions", "limit", 0, "INVALID_LIMIT")]
+    [InlineData("SearchTransactions", "limit", -1, "INVALID_LIMIT")]
+    [InlineData("SearchTransactions", "limit", 101, "INVALID_LIMIT")]
+    public async Task InvokeAsync_WithInvalidArguments_ReturnsStructuredFailure(
+        string toolName, string parameter, object value, string expectedCode)
+    {
+        await using var context = await CreateContextAsync();
+        AIFunction function = new ExpenseTools(new TransactionQueries(context)).CreateFunctions()
+            .Single(candidate => candidate.Name == toolName);
+        var arguments = new Dictionary<string, object?>
+        {
+            ["startDate"] = "2026-03-01",
+            ["endDate"] = "2026-04-01",
+            [parameter] = value
+        };
+
+        JsonElement envelope = await InvokeResultAsync(function, JsonSerializer.Serialize(arguments));
+
+        AssertFailure(envelope, expectedCode);
+    }
+
+    [Theory]
+    [InlineData("SearchTransactions")]
+    [InlineData("GetSpendingSummary")]
+    public async Task InvokeAsync_WithInvalidRange_DoesNotAccessDatabase(string toolName)
+    {
+        await using var context = await CreateContextAsync();
+        await context.Database.ExecuteSqlRawAsync("DROP TABLE Transactions");
+        AIFunction function = new ExpenseTools(new TransactionQueries(context)).CreateFunctions()
+            .Single(candidate => candidate.Name == toolName);
+
+        JsonElement envelope = await InvokeResultAsync(function, """
+            { "startDate": "2026-03-01", "endDate": "2026-03-01" }
+            """);
+
+        AssertFailure(envelope, "INVALID_DATE_RANGE");
+    }
+
+    [Theory]
+    [InlineData("SearchTransactions")]
+    [InlineData("GetSpendingSummary")]
+    public async Task InvokeAsync_WhenDatabaseFails_ReturnsSafeFailure(string toolName)
+    {
+        await using var context = await CreateContextAsync();
+        await context.Database.ExecuteSqlRawAsync("DROP TABLE Transactions");
+        AIFunction function = new ExpenseTools(new TransactionQueries(context)).CreateFunctions()
+            .Single(candidate => candidate.Name == toolName);
+
+        JsonElement envelope = await InvokeResultAsync(function, """
+            { "startDate": "2026-03-01", "endDate": "2026-04-01" }
+            """);
+
+        AssertFailure(envelope, "QUERY_FAILED");
+        Assert.Equal("The transaction query could not be completed. No result is available.",
+            envelope.GetProperty("error").GetProperty("message").GetString());
+        Assert.DoesNotContain("SQLite", envelope.GetRawText());
+        Assert.DoesNotContain("no such table", envelope.GetRawText());
+    }
+
+    [Fact]
+    public async Task InvokeAsync_WithNoMatches_ReturnsSuccessfulEmptyResults()
+    {
+        await using var context = await CreateContextAsync();
+        IReadOnlyList<AIFunction> functions = new ExpenseTools(new TransactionQueries(context)).CreateFunctions();
+        const string arguments = """
+            { "startDate": "2025-01-01", "endDate": "2025-02-01" }
+            """;
+
+        TransactionSearchResult search = await InvokeAsync<TransactionSearchResult>(functions[0], arguments);
+        SpendingSummary summary = await InvokeAsync<SpendingSummary>(functions[1], arguments);
+
+        Assert.Empty(search.Transactions);
+        Assert.False(search.HasMore);
+        Assert.Equal(0m, summary.TotalSpending);
+        Assert.Equal(0, summary.TransactionCount);
+        Assert.Equal("EUR", summary.Currency);
+    }
+
+    [Fact]
+    public async Task Tools_WhenAlreadyCancelled_PropagateCancellation()
+    {
+        await using var context = await CreateContextAsync();
+        var tools = new ExpenseTools(new TransactionQueries(context));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tools.SearchTransactionsAsync(
+            new DateOnly(2026, 3, 1), new DateOnly(2026, 4, 1), cancellationToken: cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tools.GetSpendingSummaryAsync(
+            new DateOnly(2026, 3, 1), new DateOnly(2026, 4, 1), cancellationToken: cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Tools_WhenQueryThrowsCancellation_DoNotConvertItToFailure()
+    {
+        var tools = new ExpenseTools(new CancellingQueries());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tools.SearchTransactionsAsync(
+            new DateOnly(2026, 3, 1), new DateOnly(2026, 4, 1)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tools.GetSpendingSummaryAsync(
+            new DateOnly(2026, 3, 1), new DateOnly(2026, 4, 1)));
+    }
+
+    private static void AssertFailure(JsonElement envelope, string expectedCode)
+    {
+        Assert.False(envelope.GetProperty("isSuccess").GetBoolean());
+        Assert.True(envelope.GetProperty("isFailure").GetBoolean());
+        Assert.True(!envelope.TryGetProperty("result", out JsonElement result) || result.ValueKind == JsonValueKind.Null);
+        JsonElement error = envelope.GetProperty("error");
+        Assert.Equal(expectedCode, error.GetProperty("code").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(error.GetProperty("message").GetString()));
+    }
+
+    private sealed class CancellingQueries : ITransactionQueries
+    {
+        public Task<TransactionSearchResult> SearchTransactionsAsync(
+            DateOnly startDate, DateOnly endDate, string? categoryId = null, string? merchantText = null,
+            int limit = 20, CancellationToken cancellationToken = default) =>
+            throw new OperationCanceledException();
+
+        public Task<SpendingSummary> GetSpendingSummaryAsync(
+            DateOnly startDate, DateOnly endDate, string? categoryId = null,
+            CancellationToken cancellationToken = default) =>
+            throw new OperationCanceledException();
+    }
+
     private static async Task<TResult> InvokeAsync<TResult>(AIFunction function, string json)
     {
-        var arguments = new AIFunctionArguments(JsonSerializer.Deserialize<Dictionary<string, object?>>(json)!);
-        object? result = await function.InvokeAsync(arguments);
-        JsonElement serializedResult = JsonSerializer.SerializeToElement(result);
-        TResult? value = serializedResult.Deserialize<TResult>(JsonSerializerOptions.Web);
+        JsonElement envelope = await InvokeResultAsync(function, json);
+        Assert.True(envelope.GetProperty("isSuccess").GetBoolean());
+        Assert.False(envelope.GetProperty("isFailure").GetBoolean());
+        Assert.True(!envelope.TryGetProperty("error", out JsonElement error) || error.ValueKind == JsonValueKind.Null);
+        TResult? value = envelope.GetProperty("result").Deserialize<TResult>(JsonSerializerOptions.Web);
         Assert.NotNull(value);
         return value;
+    }
+
+    private static async Task<JsonElement> InvokeResultAsync(
+        AIFunction function, string json, CancellationToken cancellationToken = default)
+    {
+        var arguments = new AIFunctionArguments(JsonSerializer.Deserialize<Dictionary<string, object?>>(json)!);
+        object? result = await function.InvokeAsync(arguments, cancellationToken);
+        return JsonSerializer.SerializeToElement(result, JsonSerializerOptions.Web);
     }
 
     private static async Task<ExpenseDbContext> CreateContextAsync()

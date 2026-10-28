@@ -59,7 +59,7 @@ As implementation progresses, application code belongs in `src/`, deterministic 
 
 The console app uses the .NET Generic Host and dependency injection. Configuration is loaded from `appsettings.json` beside the application output, then User Secrets, then environment variables; later sources override earlier ones. Model configuration is validated only when the chat workflow is resolved, so `--seed-only` does not require model credentials.
 
-`IChatClient`, `ChatRunner`, and `ConsoleChat` are singletons for this single-session console process, preserving the session ID across turns. `ExpenseDbContext`, `ITransactionQueries`, and `ExpenseTools` are scoped. Database initialization runs in a short-lived async scope. Tool dispatch is not connected yet; when added, it must resolve scoped services within a run scope rather than capture them in the singleton runner.
+`IChatClient` and `ConsoleChat` are singletons for this single-session console process. The console owns the session ID across turns and creates an async service scope per question. `ToolChatRunner`, `ExpenseTools`, `ITransactionQueries`, and `ExpenseDbContext` are scoped to that run and disposed afterward. Database initialization uses a separate short-lived scope. The original Core `ChatRunner` remains available for the Module 1 model-only baseline but is no longer used by the console.
 
 Host shutdown cancellation flows to console input and active chat requests. EF Core logging is limited to warnings and errors to avoid logging SQL and transaction payloads by default.
 
@@ -91,12 +91,26 @@ Search returns transaction DTOs ordered by date, then ID. The default limit is 2
 
 Summaries have no result limit. They load all matching amount/category/currency projections and aggregate exact `decimal` values in application code, avoiding SQLite decimal-aggregation limitations. This is appropriate for the small course fixture, not a large-data aggregation strategy. The configured currency defaults to EUR, including empty results; matching transactions in another currency cause a failure rather than a misleading combined total.
 
-Database and cancellation failures propagate to the caller; they are not converted into successful empty results. Mapping failures into safe model-facing tool responses is a later step.
+Database and cancellation failures propagate from the query service; they are not converted into successful empty results. `ExpenseTools` wraps successful data in `ToolResult<T>`, returns structured validation errors and safe `QUERY_FAILED` errors, and preserves cancellation.
 
 Run the query tests with:
 
 ```shell
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~TransactionQueriesTests
+```
+
+### Bounded tool round
+
+Each question advertises the two read-only functions to the model. A direct answer needs one model request. If tools are requested, the runner validates names, required dates, argument types and supported parameters, then executes them sequentially. Every result retains its original call ID, and the original assistant messages are preserved in the final request.
+
+`Assistant:MaxToolCalls` defaults to 4. Calls beyond that cap receive `TOOL_CALL_LIMIT` results without execution. Missing/malformed arguments and unknown names receive structured errors rather than query results. One final model request has tools disabled; any further tool request fails the run without executing another tool. No automatic invocation middleware or repeated agent loop is enabled.
+
+`Assistant:RequestTimeoutSeconds` bounds the complete round, including tool execution and the final model request. Caller cancellation and timeouts have distinct run outcomes. Session IDs persist across console turns, but conversation history is not yet retained between turns.
+
+Run the offline orchestration tests with:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ToolChatRunnerTests
 ```
 
 ## Safety and scope

@@ -1,12 +1,15 @@
 using ExpenseAssistant.Core;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ExpenseAssistant.App;
 
-public sealed class ConsoleChat(ChatRunner runner)
+public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 {
+	public Guid SessionId { get; } = Guid.NewGuid();
+
 	public async Task RunAsync(CancellationToken cancellationToken = default)
 	{
-		Console.WriteLine($"Session: {runner.SessionId}");
+		Console.WriteLine($"Session: {SessionId}");
 		Console.WriteLine("Ask an expense question. Press Esc to cancel a request, type 'exit' to quit.");
 
 		while (!cancellationToken.IsCancellationRequested)
@@ -25,7 +28,9 @@ public sealed class ConsoleChat(ChatRunner runner)
 			}
 
 			using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-			Task<ChatRunResult> runTask = runner.RunAsync(input, cts.Token);
+			await using AsyncServiceScope scope = scopeFactory.CreateAsyncScope();
+			ToolChatRunner runner = scope.ServiceProvider.GetRequiredService<ToolChatRunner>();
+			Task<ChatRunResult> runTask = runner.RunAsync(SessionId, input, cts.Token);
 
 			// .NET has no async key read, so poll for Esc while the request runs.
 			while (!runTask.IsCompleted)
@@ -35,7 +40,7 @@ public sealed class ConsoleChat(ChatRunner runner)
 					cts.Cancel();
 				}
 
-				await Task.Delay(50, cancellationToken);
+				await Task.Delay(50);
 			}
 
 			ChatRunResult result = await runTask;

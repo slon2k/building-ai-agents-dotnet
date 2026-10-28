@@ -59,13 +59,15 @@ builder.Services.AddSingleton(services =>
 
 builder.Services.AddSingleton<IChatClient>(services =>
 	AzureOpenAIChatClientFactory.Create(services.GetRequiredService<AzureOpenAIOptions>()));
-builder.Services.AddSingleton(services =>
+builder.Services.AddScoped(services =>
 {
 	AssistantOptions options = services.GetRequiredService<AssistantOptions>();
-	return new ChatRunner(
+	return new ToolChatRunner(
 		services.GetRequiredService<IChatClient>(),
+		services.GetRequiredService<ExpenseTools>(),
 		TimeSpan.FromSeconds(options.RequestTimeoutSeconds),
-		options.SystemPrompt);
+		options.SystemPrompt,
+		options.MaxToolCalls);
 });
 builder.Services.AddSingleton<ConsoleChat>();
 

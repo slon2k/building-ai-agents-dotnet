@@ -6,6 +6,8 @@ internal sealed class AssistantOptions
 
     public int RequestTimeoutSeconds { get; set; } = 30;
 
+    public int MaxToolCalls { get; set; } = 4;
+
     public string SystemPrompt { get; set; } = string.Empty;
 
     public void Validate()
@@ -14,6 +16,11 @@ internal sealed class AssistantOptions
         {
             throw new InvalidOperationException(
                 "Set Assistant:RequestTimeoutSeconds to a positive number of seconds.");
+        }
+
+        if (MaxToolCalls <= 0)
+        {
+            throw new InvalidOperationException("Set Assistant:MaxToolCalls to a positive number.");
         }
 
         if (string.IsNullOrWhiteSpace(SystemPrompt))
