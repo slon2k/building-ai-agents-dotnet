@@ -1,6 +1,6 @@
 namespace ExpenseAssistant.App;
 
-internal sealed class AssistantOptions
+public sealed class AssistantOptions
 {
     public const string SectionName = "Assistant";
 

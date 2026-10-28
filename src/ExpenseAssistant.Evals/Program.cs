@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ExpenseAssistant.App;
 using ExpenseAssistant.Core;
 using ExpenseAssistant.Infrastructure;
 using Microsoft.Extensions.AI;
@@ -53,14 +54,18 @@ AzureOpenAIOptions modelOptions = configuration
 	.Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
 modelOptions.Validate();
 
-int timeoutSeconds = configuration.GetValue("Assistant:RequestTimeoutSeconds", 30);
+AssistantOptions assistantOptions = configuration
+	.GetSection(AssistantOptions.SectionName)
+	.Get<AssistantOptions>() ?? new AssistantOptions();
+
+int timeoutSeconds = assistantOptions.RequestTimeoutSeconds;
 if (timeoutSeconds <= 0)
 {
 	Console.Error.WriteLine("Assistant:RequestTimeoutSeconds must be positive.");
 	return 2;
 }
 
-string systemPrompt = configuration["Assistant:SystemPrompt"] ?? string.Empty;
+string systemPrompt = assistantOptions.SystemPrompt;
 if (string.IsNullOrWhiteSpace(systemPrompt))
 {
 	Console.Error.WriteLine("Assistant:SystemPrompt must be configured.");

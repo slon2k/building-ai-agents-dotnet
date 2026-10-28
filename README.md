@@ -59,7 +59,7 @@ As implementation progresses, application code belongs in `src/`, deterministic 
 
 The console app uses the .NET Generic Host and dependency injection. Configuration is loaded from `appsettings.json` beside the application output, then User Secrets, then environment variables; later sources override earlier ones. Model configuration is validated only when the chat workflow is resolved, so `--seed-only` does not require model credentials.
 
-`IChatClient` and `ConsoleChat` are singletons for this single-session console process. The console owns the session ID across turns and creates an async service scope per question. `ToolChatRunner`, `ExpenseTools`, `ITransactionQueries`, and `ExpenseDbContext` are scoped to that run and disposed afterward. Database initialization uses a separate short-lived scope. The original Core `ChatRunner` remains available for the Module 1 model-only baseline but is no longer used by the console.
+`IChatClient` and `ConsoleChat` are singletons for this single-session console process. The console owns the session ID across turns and creates an async service scope per question. `ToolChatRunner`, `ExpenseTools`, `ITransactionQueries`, and `ExpenseDbContext` are scoped to that run and disposed afterward. Database initialization uses a separate short-lived scope. Both runners live in App: `ToolChatRunner` powers the console, while `ChatRunner` remains available for the Module 1 model-only baseline. Evals references App to reuse `ChatRunner` and the public `AssistantOptions` configuration contract; its startup and reporting remain separate.
 
 Host shutdown cancellation flows to console input and active chat requests. EF Core logging is limited to warnings and errors to avoid logging SQL and transaction payloads by default.
 

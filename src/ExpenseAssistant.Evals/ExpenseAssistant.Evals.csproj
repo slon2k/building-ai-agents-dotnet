@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\ExpenseAssistant.App\ExpenseAssistant.App.csproj" />
     <ProjectReference Include="..\ExpenseAssistant.Core\ExpenseAssistant.Core.csproj" />
     <ProjectReference Include="..\ExpenseAssistant.Infrastructure\ExpenseAssistant.Infrastructure.csproj" />
   </ItemGroup>
