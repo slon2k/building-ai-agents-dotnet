@@ -55,6 +55,14 @@ Previous agent-development experience is not required. Record the SDK, package v
 
 As implementation progresses, application code belongs in `src/`, deterministic tests in `tests/`, scenarios and synthetic fixtures in `evals/`, and learning records in `docs/`. Introduce these folders when needed. Build and run commands will be documented when the solution exists.
 
+### Application startup
+
+The console app uses the .NET Generic Host and dependency injection. Configuration is loaded from `appsettings.json` beside the application output, then User Secrets, then environment variables; later sources override earlier ones. Model configuration is validated only when the chat workflow is resolved, so `--seed-only` does not require model credentials.
+
+`IChatClient`, `ChatRunner`, and `ConsoleChat` are singletons for this single-session console process, preserving the session ID across turns. `ExpenseDbContext`, `ITransactionQueries`, and `ExpenseTools` are scoped. Database initialization runs in a short-lived async scope. Tool dispatch is not connected yet; when added, it must resolve scoped services within a run scope rather than capture them in the singleton runner.
+
+Host shutdown cancellation flows to console input and active chat requests. EF Core logging is limited to warnings and errors to avoid logging SQL and transaction payloads by default.
+
 ### Seed the local database
 
 Initialize SQLite without model credentials or a model request:
