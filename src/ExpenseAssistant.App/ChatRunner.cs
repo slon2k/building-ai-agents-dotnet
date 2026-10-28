@@ -1,7 +1,8 @@
 using System.Diagnostics;
+using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
 
-namespace ExpenseAssistant.Core;
+namespace ExpenseAssistant.App;
 
 public sealed class ChatRunner(IChatClient chatClient, TimeSpan requestTimeout, string systemPrompt)
 {

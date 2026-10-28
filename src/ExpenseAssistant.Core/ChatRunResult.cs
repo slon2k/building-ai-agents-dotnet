@@ -16,4 +16,5 @@ public sealed record ChatRunResult(
     ChatRunStatus Status,
     TimeSpan Duration,
     ChatResponse? Response = null,
-    string? Error = null);
+    string? Error = null,
+    UsageDetails? Usage = null);

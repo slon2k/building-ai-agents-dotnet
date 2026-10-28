@@ -55,6 +55,126 @@ Previous agent-development experience is not required. Record the SDK, package v
 
 As implementation progresses, application code belongs in `src/`, deterministic tests in `tests/`, scenarios and synthetic fixtures in `evals/`, and learning records in `docs/`. Introduce these folders when needed. Build and run commands will be documented when the solution exists.
 
+### Application startup
+
+The console app uses the .NET Generic Host and dependency injection. Configuration is loaded from `appsettings.json` beside the application output, then User Secrets, then environment variables; later sources override earlier ones. Model configuration is validated only when the chat workflow is resolved, so `--seed-only` does not require model credentials.
+
+`IChatClient` and `ConsoleChat` are singletons for this single-session console process. The console owns the session ID across turns and creates an async service scope per question. `ToolChatRunner`, `ExpenseTools`, `ITransactionQueries`, and `ExpenseDbContext` are scoped to that run and disposed afterward. Database initialization uses a separate short-lived scope. Both runners live in App: `ToolChatRunner` powers the console, while `ChatRunner` remains available for the Module 1 model-only baseline. Evals references App to reuse `ChatRunner` and the public `AssistantOptions` configuration contract; its startup and reporting remain separate.
+
+Host shutdown cancellation flows to console input and active chat requests. EF Core logging is limited to warnings and errors to avoid logging SQL and transaction payloads by default.
+
+### Seed the local database
+
+Initialize SQLite without model credentials or a model request:
+
+```shell
+dotnet run --project src/ExpenseAssistant.App -- --seed-only
+```
+
+Normal application startup also runs initialization. By default, `expense-assistant.db` is created beside the application output. Override the SQLite connection string through `ConnectionStrings:Expenses` in configuration or the `ConnectionStrings__Expenses` environment variable.
+
+The fixed synthetic fixture `v1` contains 123 transactions across January-June 2026 and eight categories. All expenses are positive EUR amounts, with no refunds or transfers. Amounts use `decimal` in application code and integer cents in SQLite; more than two decimal places are rejected. The March groceries fixture contains exactly `TX-G1` and `TX-G2`, totaling EUR 21.25; `TX-G3` is dated April 1 and is excluded from March.
+
+Initialization inserts missing fixture IDs atomically and preserves existing records, including edited categories. It is not a reset command: use a fresh database for baseline evaluations and tests. The initializer uses `EnsureCreatedAsync`, not migrations; it does not upgrade an existing schema.
+
+Run the database tests with:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ExpenseDbContextTests
+```
+
+### Transaction queries
+
+Core defines `ITransactionQueries` and read-only result records; Infrastructure implements it with `TransactionQueries`. Both operations use an inclusive start date and exclusive end date, accept an optional exact category ID, and pass cancellation through to EF Core. Unknown or blank category IDs and invalid date ranges are rejected with argument exceptions.
+
+Search returns transaction DTOs ordered by date, then ID. The default limit is 20, with allowed limits of 1-100. `ReturnedCount` describes the returned subset; `HasMore` indicates omitted matches, determined by fetching one extra row. Merchant filtering uses a trimmed, literal substring with SQLite's default ASCII case-insensitive `LIKE` behavior. Percent and underscore characters are escaped, not treated as wildcards; blank merchant filters are rejected.
+
+Summaries have no result limit. They load all matching amount/category/currency projections and aggregate exact `decimal` values in application code, avoiding SQLite decimal-aggregation limitations. This is appropriate for the small course fixture, not a large-data aggregation strategy. The configured currency defaults to EUR, including empty results; matching transactions in another currency cause a failure rather than a misleading combined total.
+
+Database and cancellation failures propagate from the query service; they are not converted into successful empty results. `ExpenseTools` wraps successful data in `ToolResult<T>`, returns structured validation errors and safe `QUERY_FAILED` errors, and preserves cancellation.
+
+Run the query tests with:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~TransactionQueriesTests
+```
+
+### Bounded tool round
+
+Each question advertises the two read-only functions to the model. A direct answer needs one model request. If tools are requested, the runner validates names, required dates, argument types and supported parameters, then executes them sequentially. Every result retains its original call ID, and the original assistant messages are preserved in the final request.
+
+`Assistant:MaxToolCalls` defaults to 4. Calls beyond that cap receive `TOOL_CALL_LIMIT` results without execution. Missing/malformed arguments and unknown names receive structured errors rather than query results. One final model request has tools disabled; any further tool request fails the run without executing another tool. No automatic invocation middleware or repeated agent loop is enabled.
+
+`Assistant:RequestTimeoutSeconds` bounds the complete round, including tool execution and the final model request. Caller cancellation and timeouts have distinct run outcomes. Session IDs persist across console turns, but conversation history is not yet retained between turns.
+
+Run the offline orchestration tests with:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ToolChatRunnerTests
+```
+
+### Logging and tracing
+
+Diagnostics are written through Serilog to `logs/expense-assistant-YYYYMMDD.jsonl` beside the application output (for example, `src/ExpenseAssistant.App/bin/Debug/net10.0/logs/`). Each line is a JSON event with a timestamp, level, message template, rendered message, and structured properties. Files roll daily and when they reach 10 MB; at most seven files are retained, so high-volume size rolls may retain less than seven days. The log directory is already excluded by `.gitignore`. The logger is disposed after the host to flush and close files during normal shutdown.
+
+Console diagnostic providers are removed; the terminal retains chat prompts, assistant answers, usage, session/run summaries, and the seed-only confirmation. File events cover database initialization, run start/completion, both model requests, and each tool's validation/execution. Log scopes carry `SessionId` and `RunId`; tool scopes add `ToolCallId` and `ToolName`. Completion records include duration, outcome/error code, and available token counts. Unknown tool names are logged as `unrecognized` rather than echoing arbitrary model-generated text.
+
+`ActivitySource` named `ExpenseAssistant.App.ToolChatRunner` exposes this span hierarchy:
+
+```text
+assistant.run
+	model.initial
+	tool.execute (one per requested call, including rejected calls)
+	model.final (only when the initial response requests tools)
+```
+
+Spans include correlation IDs, timing, outcome, and available model usage; tool spans also contain call IDs, allowlisted names, and error codes. Attach an `ActivityListener` or configure an OpenTelemetry listener for this source to collect spans. No tracing backend or exporter is required for file logging, and spans are not collected without a listener.
+
+Prompts, model response text, tool arguments/results, transaction descriptions, credentials, and raw exception details are not logged by the runner. The interactive assistant answer is still printed normally. Serilog defaults to Information, with EF Core and host-lifetime events restricted to Warning and above. These levels are set explicitly in the logger configuration in `Program.cs`; existing `Logging:LogLevel` settings do not control this Serilog provider. Leave EF Core sensitive-data logging disabled.
+
+The console's `Run usage` comes from `ChatRunResult.Usage`, summing the initial and final model requests without changing either response's own usage metadata. If any request omits usage, the aggregate is unknown; a missing individual count also remains unknown rather than being treated as zero. Per-request logs retain whatever usage the provider supplies.
+
+Run the offline telemetry tests with:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ToolChatRunnerTelemetryTests
+```
+
+If a running Windows console process locks Debug assemblies, add `--configuration Release` to the test command instead of stopping that session.
+
+### Evaluation scenarios
+
+`evals/scenarios.json` retains the four Module 1 scenario IDs in `model-only` mode and adds eight Module 2 scenarios in `tools` mode. The missing-transaction-data baselines still run without tools; their original expected behavior has not been reinterpreted. Tool scenarios declare `datasetVersion: "v1"`. Independent expected totals, counts, currency and record IDs live in `evals/fixtures/v1.json`.
+
+Validate the entire catalog and verify the fixture assertions against freshly seeded SQLite, without credentials or model calls:
+
+```shell
+dotnet run --project src/ExpenseAssistant.Evals -- --validate
+```
+
+The following commands make paid requests to the configured model. Run them deliberately after offline validation:
+
+```shell
+dotnet run --project src/ExpenseAssistant.Evals -- --mode tools
+dotnet run --project src/ExpenseAssistant.Evals -- --mode model-only
+```
+
+Omitting `--mode` preserves the model-only default; `--mode all` explicitly selects both groups. An optional scenario-file path is supported; its fixture assertions are resolved from the adjacent `fixtures/v1.json` file. Validation checks the whole catalog regardless of execution mode.
+
+Each tool-enabled scenario gets a separate in-memory SQLite database, fresh synthetic data, and a distinct session/run ID. Database fingerprints include every transaction field and category before and after the run. The query-failure scenario enables an interceptor only during that scenario's model/tool round; it does not damage the fixture or touch the interactive app's database.
+
+Reports under git-ignored `evals/results/` include selected tool names, call IDs, JSON arguments, structured results, final answers, aggregate usage and deterministic checks. This payload capture is intentional for synthetic evaluation data only and does not change normal application logs. Do not run these scenarios against personal transactions.
+
+Expected tool calls are matched by name and the declared argument subset, without requiring one particular call order. Fixture-backed result checks independently verify full summary totals and limited-search IDs/`HasMore`. The runner returns a nonzero exit code for failed runs or failed deterministic checks. `ManualReview` stays `NotReviewed`: successful execution and correct tool results do not prove the final answer is accurate or that refusals/clarification are appropriate. Review those against each scenario's `expectedBehavior`.
+
+Offline runner tests cover tool evidence, isolated fixtures, read-only state assertions, injected failures, invalid scenario contracts and baseline compatibility:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~EvaluationScenarioTests
+```
+
+Live behavioral batches and the controlled tool-description comparison still need to be run and recorded in the Module 2 checkpoint; these offline checks do not substitute for that evidence.
+
 ## Safety and scope
 
 - Keep credentials outside source control. A .NET gitignore alone does not guarantee that secrets are excluded.

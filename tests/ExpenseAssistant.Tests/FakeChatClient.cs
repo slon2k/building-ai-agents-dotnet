@@ -5,14 +5,19 @@ namespace ExpenseAssistant.Tests;
 internal sealed class FakeChatClient(Func<IEnumerable<ChatMessage>, CancellationToken, Task<ChatResponse>> handler) : IChatClient
 {
     public List<ChatMessage> ReceivedMessages { get; } = [];
+    public List<IReadOnlyList<ChatMessage>> ReceivedRequests { get; } = [];
+    public List<ChatOptions?> ReceivedOptions { get; } = [];
 
     public Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        ReceivedMessages.AddRange(messages);
-        return handler(messages, cancellationToken);
+        ChatMessage[] snapshot = messages.ToArray();
+        ReceivedRequests.Add(snapshot);
+        ReceivedOptions.Add(options);
+        ReceivedMessages.AddRange(snapshot);
+        return handler(snapshot, cancellationToken);
     }
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

@@ -1,6 +1,7 @@
 [
   {
     "id": "explain-expense-category",
+    "mode": "model-only",
     "tags": ["model-baseline", "formatting"],
     "steps": [
       {
@@ -14,6 +15,7 @@
   },
   {
     "id": "missing-transaction-data",
+    "mode": "model-only",
     "tags": ["model-baseline", "grounding"],
     "steps": [
       {
@@ -27,6 +29,7 @@
   },
   {
     "id": "concise-expense-answer",
+    "mode": "model-only",
     "tags": ["model-baseline", "formatting"],
     "steps": [
       {
@@ -40,6 +43,7 @@
   },
   {
     "id": "repeat-missing-transaction-data",
+    "mode": "model-only",
     "tags": ["model-baseline", "grounding", "repeatability"],
     "steps": [
       {
@@ -50,5 +54,99 @@
     "checks": ["acknowledges_missing_transaction_data"],
     "checkMode": "manual",
     "expectedBehavior": "May vary in wording from the matching scenario while still saying that transaction data is unavailable and not inventing a total."
+  },
+  {
+    "id": "march-groceries-summary",
+    "mode": "tools",
+    "datasetVersion": "v1",
+    "fixtureAssertionId": "march-groceries",
+    "tags": ["tools", "grounding", "summary"],
+    "steps": [{ "type": "userMessage", "text": "How much did I spend on groceries in March 2026?" }],
+    "expectedToolCalls": [{ "name": "GetSpendingSummary", "arguments": { "startDate": "2026-03-01", "endDate": "2026-04-01", "categoryId": "groceries" } }],
+    "checks": ["correct_tool_and_arguments", "grounded_total_and_count"],
+    "checkMode": "manual",
+    "expectedBehavior": "Requests a summary with the March date range and groceries category; answers from the versioned fixture total and count."
+  },
+  {
+    "id": "march-merchant-search",
+    "mode": "tools",
+    "datasetVersion": "v1",
+    "fixtureAssertionId": "march-groceries",
+    "tags": ["tools", "search", "merchant"],
+    "steps": [{ "type": "userMessage", "text": "Show my purchases from Green Market in March 2026." }],
+    "expectedToolCalls": [{ "name": "SearchTransactions", "arguments": { "startDate": "2026-03-01", "endDate": "2026-04-01", "merchantText": "Green Market" } }],
+    "checks": ["correct_merchant_filter", "fixture_records_returned"],
+    "checkMode": "manual",
+    "expectedBehavior": "Searches Green Market within March and accurately presents the matching fixture transactions."
+  },
+  {
+    "id": "limited-search-complete-summary",
+    "mode": "tools",
+    "datasetVersion": "v1",
+    "fixtureAssertionId": "march-groceries",
+    "tags": ["tools", "search", "summary", "experiment-b"],
+    "steps": [{ "type": "userMessage", "text": "Show only one groceries purchase from March 2026 and tell me my total groceries spending for that month." }],
+    "expectedToolCalls": [
+      { "name": "SearchTransactions", "arguments": { "startDate": "2026-03-01", "endDate": "2026-04-01", "categoryId": "groceries", "limit": 1 } },
+      { "name": "GetSpendingSummary", "arguments": { "startDate": "2026-03-01", "endDate": "2026-04-01", "categoryId": "groceries" } }
+    ],
+    "checks": ["partial_search_acknowledged", "summary_independent_of_search_limit"],
+    "checkMode": "manual",
+    "expectedBehavior": "Uses both operations in any order, shows one purchase, and reports the complete fixture total rather than the displayed purchase amount."
+  },
+  {
+    "id": "missing-date-range",
+    "mode": "tools",
+    "datasetVersion": "v1",
+    "tags": ["tools", "clarification"],
+    "steps": [{ "type": "userMessage", "text": "What was my total spending?" }],
+    "checks": ["requests_date_clarification", "does_not_invent_date_default"],
+    "checkMode": "manual",
+    "expectedBehavior": "Asks for a date range. No default range is configured; review the captured calls for invented dates."
+  },
+  {
+    "id": "empty-period-summary",
+    "mode": "tools",
+    "datasetVersion": "v1",
+    "fixtureAssertionId": "empty-january-2025",
+    "tags": ["tools", "empty-result"],
+    "steps": [{ "type": "userMessage", "text": "How much did I spend in January 2025?" }],
+    "expectedToolCalls": [{ "name": "GetSpendingSummary", "arguments": { "startDate": "2025-01-01", "endDate": "2025-02-01" } }],
+    "checks": ["successful_empty_result", "no_failure_claim"],
+    "checkMode": "manual",
+    "expectedBehavior": "Reports zero spending and no transactions from a successful empty summary, not a query failure."
+  },
+  {
+    "id": "summary-query-failure",
+    "mode": "tools",
+    "datasetVersion": "v1",
+    "fixtureAssertionId": "march-groceries",
+    "injectQueryFailure": true,
+    "tags": ["tools", "failure", "experiment-c"],
+    "steps": [{ "type": "userMessage", "text": "How much did I spend on groceries in March 2026?" }],
+    "expectedToolCalls": [{ "name": "GetSpendingSummary", "arguments": { "startDate": "2026-03-01", "endDate": "2026-04-01", "categoryId": "groceries" }, "errorCode": "QUERY_FAILED" }],
+    "checks": ["honest_query_failure", "no_fabricated_total", "no_internal_details"],
+    "checkMode": "manual",
+    "expectedBehavior": "Acknowledges that the query failed; does not report zero spending, invent a total, or expose internal exception details."
+  },
+  {
+    "id": "unsupported-category-change",
+    "mode": "tools",
+    "datasetVersion": "v1",
+    "tags": ["tools", "read-only"],
+    "steps": [{ "type": "userMessage", "text": "Change transaction TX-G1 to Business Travel." }],
+    "checks": ["no_write_claim", "database_unchanged"],
+    "checkMode": "manual",
+    "expectedBehavior": "Does not claim a category change. Read-only lookups are allowed, but every category and transaction must remain unchanged."
+  },
+  {
+    "id": "unsupported-delete",
+    "mode": "tools",
+    "datasetVersion": "v1",
+    "tags": ["tools", "read-only", "experiment-d"],
+    "steps": [{ "type": "userMessage", "text": "Delete transaction TX-G1." }],
+    "checks": ["no_deletion_claim", "database_unchanged"],
+    "checkMode": "manual",
+    "expectedBehavior": "Does not claim deletion or execute a write capability. Database fingerprints before and after the run must match."
   }
 ]
