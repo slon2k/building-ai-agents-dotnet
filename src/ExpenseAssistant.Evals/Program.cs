@@ -2,33 +2,76 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ExpenseAssistant.App;
 using ExpenseAssistant.Core;
+using ExpenseAssistant.Evals;
 using ExpenseAssistant.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 
-bool validateOnly = args.Length > 0 && args[0] == "--validate";
-string[] scenarioArguments = validateOnly ? [.. args.Skip(1)] : args;
-
-if (scenarioArguments.Length > 1)
+bool validateOnly = false;
+string mode = "model-only";
+string? scenarioFile = null;
+for (int index = 0; index < args.Length; index++)
 {
-	Console.Error.WriteLine("Usage: ExpenseAssistant.Evals [--validate] [path-to-scenarios.json]");
+	if (args[index] == "--validate")
+	{
+		validateOnly = true;
+	}
+	else if (args[index] == "--mode" && index + 1 < args.Length)
+	{
+		mode = args[++index];
+	}
+	else if (!args[index].StartsWith("--", StringComparison.Ordinal) && scenarioFile is null)
+	{
+		scenarioFile = args[index];
+	}
+	else
+	{
+		Console.Error.WriteLine("Usage: ExpenseAssistant.Evals [--validate] [--mode model-only|tools|all] [path-to-scenarios.json]");
+		return 2;
+	}
+}
+
+if (mode is not ("model-only" or "tools" or "all"))
+{
+	Console.Error.WriteLine("Mode must be model-only, tools, or all.");
 	return 2;
 }
 
-string scenarioPath = Path.GetFullPath(scenarioArguments.Length == 1
-	? scenarioArguments[0]
-	: Path.Combine("evals", "scenarios.json"));
+string scenarioPath = Path.GetFullPath(scenarioFile ?? Path.Combine("evals", "scenarios.json"));
+var jsonOptions = new JsonSerializerOptions
+{
+	PropertyNameCaseInsensitive = true,
+	UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+};
 
 List<EvaluationScenario?> scenarios;
+FixtureAssertions? fixtures = null;
 try
 {
 	string scenarioJson = await File.ReadAllTextAsync(scenarioPath);
-	scenarios = JsonSerializer.Deserialize<List<EvaluationScenario?>>(scenarioJson, new JsonSerializerOptions
+	scenarios = JsonSerializer.Deserialize<List<EvaluationScenario?>>(scenarioJson, jsonOptions)
+		?? throw new InvalidDataException("The scenario file must contain a JSON array.");
+	ScenarioCatalog.Validate(scenarios);
+	if (scenarios.Any(scenario => scenario!.Mode == "tools"))
 	{
-		PropertyNameCaseInsensitive = true,
-		UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
-	}) ?? throw new InvalidDataException("The scenario file must contain a JSON array.");
-	ValidateScenarios(scenarios);
+		string fixturePath = Path.Combine(Path.GetDirectoryName(scenarioPath)!, "fixtures", $"{ExpenseDatabaseInitializer.DatasetVersion}.json");
+		fixtures = JsonSerializer.Deserialize<FixtureAssertions>(await File.ReadAllTextAsync(fixturePath), jsonOptions)
+			?? throw new InvalidDataException("Fixture assertions must be an object.");
+		fixtures.Validate(scenarios.Cast<EvaluationScenario>());
+		var databaseOptions = new DbContextOptionsBuilder<ExpenseDbContext>()
+			.UseSqlite("Data Source=:memory:;Foreign Keys=True").Options;
+		await using var context = new ExpenseDbContext(databaseOptions);
+		await context.Database.OpenConnectionAsync();
+		await ExpenseDatabaseInitializer.InitializeAsync(context);
+		foreach (var assertion in fixtures.Assertions)
+		{
+			if (!await assertion.Value.VerifyAsync(new TransactionQueries(context), CancellationToken.None))
+			{
+				throw new InvalidDataException($"Fixture assertion '{assertion.Key}' does not match the seeded dataset.");
+			}
+		}
+	}
 }
 catch (Exception exception) when (exception is IOException or JsonException or InvalidDataException)
 {
@@ -38,8 +81,16 @@ catch (Exception exception) when (exception is IOException or JsonException or I
 
 if (validateOnly)
 {
-	Console.WriteLine($"Validated {scenarios.Count} scenario(s) in {scenarioPath}.");
+	Console.WriteLine($"Validated {scenarios.Count} scenario(s) and {fixtures?.Assertions.Count ?? 0} fixture assertion(s) in {scenarioPath}. No model requests made.");
 	return 0;
+}
+
+EvaluationScenario[] selected = scenarios.Cast<EvaluationScenario>()
+	.Where(scenario => mode == "all" || scenario.Mode == mode).ToArray();
+if (selected.Length == 0)
+{
+	Console.Error.WriteLine($"No scenarios match mode '{mode}'.");
+	return 2;
 }
 
 IConfiguration configuration = new ConfigurationBuilder()
@@ -72,32 +123,22 @@ if (string.IsNullOrWhiteSpace(systemPrompt))
 	return 2;
 }
 
-IChatClient chatClient = AzureOpenAIChatClientFactory.Create(modelOptions);
+if (selected.Any(scenario => scenario.Mode == "tools") && assistantOptions.MaxToolCalls <= 0)
+{
+	Console.Error.WriteLine("Assistant:MaxToolCalls must be positive.");
+	return 2;
+}
+
+using IChatClient chatClient = AzureOpenAIChatClientFactory.Create(modelOptions);
+var evaluator = new EvaluationScenarioRunner(chatClient, assistantOptions, fixtures);
 var scenarioResults = new List<EvaluationScenarioResult>();
 
-foreach (EvaluationScenario scenario in scenarios.Cast<EvaluationScenario>())
+Console.WriteLine($"Running {selected.Length} scenario(s), mode={mode}. These requests use the configured model.");
+foreach (EvaluationScenario scenario in selected)
 {
-	var runner = new ChatRunner(chatClient, TimeSpan.FromSeconds(timeoutSeconds), systemPrompt);
-	ChatRunResult run = await runner.RunAsync(scenario.Steps![0].Text!, CancellationToken.None);
-	ChatResponse? response = run.Response;
-
-	scenarioResults.Add(new EvaluationScenarioResult(
-		scenario.Id,
-		scenario.Tags ?? [],
-		scenario.Checks!,
-		scenario.ExpectedBehavior!,
-		run.SessionId,
-		run.RunId,
-		run.Status.ToString(),
-		run.Duration.TotalMilliseconds,
-		response?.Text,
-		response?.FinishReason?.ToString(),
-		response?.Usage?.InputTokenCount,
-		response?.Usage?.OutputTokenCount,
-		response?.Usage?.TotalTokenCount,
-		run.Error));
-
-	Console.WriteLine($"{scenario.Id}: {run.Status} ({run.Duration.TotalMilliseconds:0} ms)");
+	EvaluationScenarioResult result = await evaluator.RunAsync(scenario);
+	scenarioResults.Add(result);
+	Console.WriteLine($"{scenario.Id}: {result.Status} ({result.DurationMilliseconds:0} ms), deterministicChecksPass={result.DeterministicChecks!.Values.All(passed => passed)}");
 }
 
 var report = new EvaluationReport(
@@ -117,85 +158,8 @@ await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, new Js
 }));
 
 Console.WriteLine($"Report: {reportPath}");
-Console.WriteLine("Review each response against its expected behavior; this runner does not score answers automatically.");
+Console.WriteLine("Review each response against its expected behavior. ManualReview remains NotReviewed; deterministic checks do not grade answer quality.");
 
-return scenarioResults.All(result => result.Status == nameof(ChatRunStatus.Completed)) ? 0 : 1;
+return scenarioResults.All(result => result.Status == nameof(ChatRunStatus.Completed)
+	&& result.DeterministicChecks!.Values.All(passed => passed)) ? 0 : 1;
 
-static void ValidateScenarios(IReadOnlyList<EvaluationScenario?> scenarios)
-{
-	if (scenarios.Count == 0)
-	{
-		throw new InvalidDataException("The scenario file must contain at least one scenario.");
-	}
-
-	var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-	for (int index = 0; index < scenarios.Count; index++)
-	{
-		EvaluationScenario? scenario = scenarios[index];
-		if (scenario is null)
-		{
-			throw new InvalidDataException($"Scenario at index {index} must be an object.");
-		}
-
-		if (string.IsNullOrWhiteSpace(scenario.Id) || !ids.Add(scenario.Id))
-		{
-			throw new InvalidDataException($"Scenario at index {index} has a missing or duplicate id.");
-		}
-
-		if (!string.Equals(scenario.CheckMode, "manual", StringComparison.OrdinalIgnoreCase))
-		{
-			throw new InvalidDataException($"Scenario '{scenario.Id}' must use checkMode 'manual' in this runner version.");
-		}
-
-		if (scenario.Steps is not [{ Type: "userMessage", Text: not null and not "" }])
-		{
-			throw new InvalidDataException($"Scenario '{scenario.Id}' must have exactly one non-empty userMessage step.");
-		}
-
-		if (scenario.Checks is not { Length: > 0 } ||
-			string.IsNullOrWhiteSpace(scenario.ExpectedBehavior))
-		{
-			throw new InvalidDataException($"Scenario '{scenario.Id}' requires checks and expectedBehavior for manual review.");
-		}
-	}
-}
-
-internal sealed class EvaluationScenario
-{
-	public string Id { get; init; } = string.Empty;
-	public string[]? Tags { get; init; }
-	public EvaluationStep[]? Steps { get; init; }
-	public string[]? Checks { get; init; }
-	public string CheckMode { get; init; } = string.Empty;
-	public string? ExpectedBehavior { get; init; }
-}
-
-internal sealed class EvaluationStep
-{
-	public string Type { get; init; } = string.Empty;
-	public string? Text { get; init; }
-}
-
-internal sealed record EvaluationReport(
-	DateTimeOffset CreatedAtUtc,
-	string Provider,
-	string Deployment,
-	int RequestTimeoutSeconds,
-	string SystemPrompt,
-	IReadOnlyList<EvaluationScenarioResult> Scenarios);
-
-internal sealed record EvaluationScenarioResult(
-	string Id,
-	IReadOnlyList<string> Tags,
-	IReadOnlyList<string> Checks,
-	string ExpectedBehavior,
-	Guid SessionId,
-	Guid RunId,
-	string Status,
-	double DurationMilliseconds,
-	string? Response,
-	string? FinishReason,
-	long? InputTokenCount,
-	long? OutputTokenCount,
-	long? TotalTokenCount,
-	string? Error);

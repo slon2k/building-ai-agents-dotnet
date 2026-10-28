@@ -142,6 +142,39 @@ dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter 
 
 If a running Windows console process locks Debug assemblies, add `--configuration Release` to the test command instead of stopping that session.
 
+### Evaluation scenarios
+
+`evals/scenarios.json` retains the four Module 1 scenario IDs in `model-only` mode and adds eight Module 2 scenarios in `tools` mode. The missing-transaction-data baselines still run without tools; their original expected behavior has not been reinterpreted. Tool scenarios declare `datasetVersion: "v1"`. Independent expected totals, counts, currency and record IDs live in `evals/fixtures/v1.json`.
+
+Validate the entire catalog and verify the fixture assertions against freshly seeded SQLite, without credentials or model calls:
+
+```shell
+dotnet run --project src/ExpenseAssistant.Evals -- --validate
+```
+
+The following commands make paid requests to the configured model. Run them deliberately after offline validation:
+
+```shell
+dotnet run --project src/ExpenseAssistant.Evals -- --mode tools
+dotnet run --project src/ExpenseAssistant.Evals -- --mode model-only
+```
+
+Omitting `--mode` preserves the model-only default; `--mode all` explicitly selects both groups. An optional scenario-file path is supported; its fixture assertions are resolved from the adjacent `fixtures/v1.json` file. Validation checks the whole catalog regardless of execution mode.
+
+Each tool-enabled scenario gets a separate in-memory SQLite database, fresh synthetic data, and a distinct session/run ID. Database fingerprints include every transaction field and category before and after the run. The query-failure scenario enables an interceptor only during that scenario's model/tool round; it does not damage the fixture or touch the interactive app's database.
+
+Reports under git-ignored `evals/results/` include selected tool names, call IDs, JSON arguments, structured results, final answers, aggregate usage and deterministic checks. This payload capture is intentional for synthetic evaluation data only and does not change normal application logs. Do not run these scenarios against personal transactions.
+
+Expected tool calls are matched by name and the declared argument subset, without requiring one particular call order. Fixture-backed result checks independently verify full summary totals and limited-search IDs/`HasMore`. The runner returns a nonzero exit code for failed runs or failed deterministic checks. `ManualReview` stays `NotReviewed`: successful execution and correct tool results do not prove the final answer is accurate or that refusals/clarification are appropriate. Review those against each scenario's `expectedBehavior`.
+
+Offline runner tests cover tool evidence, isolated fixtures, read-only state assertions, injected failures, invalid scenario contracts and baseline compatibility:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~EvaluationScenarioTests
+```
+
+Live behavioral batches and the controlled tool-description comparison still need to be run and recorded in the Module 2 checkpoint; these offline checks do not substitute for that evidence.
+
 ## Safety and scope
 
 - Keep credentials outside source control. A .NET gitignore alone does not guarantee that secrets are excluded.
