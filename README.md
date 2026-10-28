@@ -55,6 +55,26 @@ Previous agent-development experience is not required. Record the SDK, package v
 
 As implementation progresses, application code belongs in `src/`, deterministic tests in `tests/`, scenarios and synthetic fixtures in `evals/`, and learning records in `docs/`. Introduce these folders when needed. Build and run commands will be documented when the solution exists.
 
+### Seed the local database
+
+Initialize SQLite without model credentials or a model request:
+
+```shell
+dotnet run --project src/ExpenseAssistant.App -- --seed-only
+```
+
+Normal application startup also runs initialization. By default, `expense-assistant.db` is created beside the application output. Override the SQLite connection string through `ConnectionStrings:Expenses` in configuration or the `ConnectionStrings__Expenses` environment variable.
+
+The fixed synthetic fixture `v1` contains 123 transactions across January-June 2026 and eight categories. All expenses are positive EUR amounts, with no refunds or transfers. Amounts use `decimal` in application code and integer cents in SQLite; more than two decimal places are rejected. The March groceries fixture contains exactly `TX-G1` and `TX-G2`, totaling EUR 21.25; `TX-G3` is dated April 1 and is excluded from March.
+
+Initialization inserts missing fixture IDs atomically and preserves existing records, including edited categories. It is not a reset command: use a fresh database for baseline evaluations and tests. The initializer uses `EnsureCreatedAsync`, not migrations; it does not upgrade an existing schema.
+
+Run the database tests with:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ExpenseDbContextTests
+```
+
 ## Safety and scope
 
 - Keep credentials outside source control. A .NET gitignore alone does not guarantee that secrets are excluded.

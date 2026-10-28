@@ -41,6 +41,10 @@ ScaffoldingReadMe.txt
 
 # Others
 evals/results/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
 ~$*
 *~
 CodeCoverage/

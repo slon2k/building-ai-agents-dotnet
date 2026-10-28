@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ExpenseAssistant.Core\ExpenseAssistant.Core.csproj" />
+    <ProjectReference Include="..\..\src\ExpenseAssistant.Infrastructure\ExpenseAssistant.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
