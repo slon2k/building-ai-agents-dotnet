@@ -7,11 +7,70 @@ using ExpenseAssistant.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Formatting.Json;
 
 namespace ExpenseAssistant.Tests;
 
 public class ToolChatRunnerTelemetryTests
 {
+    [Fact]
+    public async Task RunAsync_WithFileLogging_PreservesStructuredCorrelationWithoutPayloads()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "ExpenseAssistant.Tests", Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(directory, "events.jsonl");
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            await using var context = await CreateContextAsync();
+            Guid sessionId = Guid.NewGuid();
+            ChatRunResult result;
+            using (var fileLogger = new LoggerConfiguration()
+                .Enrich.FromLogContext()
+                .WriteTo.File(new JsonFormatter(), path)
+                .CreateLogger())
+            using (ILoggerFactory factory = LoggerFactory.Create(builder =>
+                builder.ClearProviders().AddSerilog(fileLogger)))
+            {
+                Queue<ChatResponse> responses = new([
+                    new ChatResponse(new ChatMessage(ChatRole.Assistant, [CreateCall()])),
+                    new ChatResponse(new ChatMessage(ChatRole.Assistant, "PRIVATE_FINAL_TEXT"))
+                ]);
+                var client = new FakeChatClient((_, _) => Task.FromResult(responses.Dequeue()));
+                var runner = new ToolChatRunner(client, new ExpenseTools(new TransactionQueries(context)),
+                    TimeSpan.FromSeconds(30), "PRIVATE_SYSTEM_PROMPT", logger: factory.CreateLogger<ToolChatRunner>());
+
+                result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", CancellationToken.None);
+            }
+
+            Assert.Equal(ChatRunStatus.Completed, result.Status);
+            string[] lines = await File.ReadAllLinesAsync(path);
+            Assert.NotEmpty(lines);
+            JsonElement[] events = lines.Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+            Assert.All(events, entry =>
+            {
+                Assert.True(entry.TryGetProperty("Timestamp", out _));
+                Assert.True(entry.TryGetProperty("Level", out _));
+                JsonElement properties = entry.GetProperty("Properties");
+                Assert.Equal(sessionId.ToString(), properties.GetProperty("SessionId").GetString());
+                Assert.Equal(result.RunId.ToString(), properties.GetProperty("RunId").GetString());
+            });
+            JsonElement toolEvent = Assert.Single(events, entry => entry.GetProperty("MessageTemplate")
+                .GetString()!.StartsWith("Tool finished", StringComparison.Ordinal));
+            Assert.Equal("telemetry-call", toolEvent.GetProperty("Properties").GetProperty("ToolCallId").GetString());
+            Assert.Equal("GetSpendingSummary", toolEvent.GetProperty("Properties").GetProperty("ToolName").GetString());
+            string content = string.Join('\n', lines);
+            Assert.DoesNotContain("PRIVATE_", content);
+            Assert.DoesNotContain("groceries", content);
+            Assert.DoesNotContain("2026-03-01", content);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task RunAsync_RecordsCorrelatedSpansAndSafeLogsWithAggregateUsage()
     {

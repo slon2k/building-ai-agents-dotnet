@@ -8,6 +8,9 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Events;
+using Serilog.Formatting.Json;
 using System.Text;
 
 Console.InputEncoding = Encoding.UTF8;
@@ -25,14 +28,22 @@ builder.Configuration
 	.AddUserSecrets<Program>(optional: true)
 	.AddEnvironmentVariables();
 
-builder.Logging.AddSimpleConsole(options =>
-{
-	options.IncludeScopes = true;
-	options.SingleLine = true;
-	options.TimestampFormat = "HH:mm:ss ";
-});
-builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning);
-builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
+using var fileLogger = new LoggerConfiguration()
+	.MinimumLevel.Information()
+	.MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
+	.MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Warning)
+	.Enrich.FromLogContext()
+	.WriteTo.File(
+		new JsonFormatter(renderMessage: true),
+		Path.Combine(AppContext.BaseDirectory, "logs", "expense-assistant-.jsonl"),
+		rollingInterval: RollingInterval.Day,
+		fileSizeLimitBytes: 10 * 1024 * 1024,
+		rollOnFileSizeLimit: true,
+		retainedFileCountLimit: 7,
+		shared: true)
+	.CreateLogger();
+builder.Logging.ClearProviders();
+builder.Logging.AddSerilog(fileLogger);
 
 string connectionString = builder.Configuration.GetConnectionString("Expenses")
 	?? new SqliteConnectionStringBuilder
@@ -88,6 +99,8 @@ try
 	{
 		ExpenseDbContext context = scope.ServiceProvider.GetRequiredService<ExpenseDbContext>();
 		await ExpenseDatabaseInitializer.InitializeAsync(context, stoppingToken);
+		host.Services.GetRequiredService<ILogger<Program>>()
+			.LogInformation("Database initialization completed DatasetVersion={DatasetVersion}", ExpenseDatabaseInitializer.DatasetVersion);
 	}
 
 	if (args.Contains("--seed-only", StringComparer.OrdinalIgnoreCase))

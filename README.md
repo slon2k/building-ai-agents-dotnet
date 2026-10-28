@@ -115,7 +115,9 @@ dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter 
 
 ### Logging and tracing
 
-The console emits timestamped structured logs for run start/completion, both model requests, and each tool's validation/execution. Log scopes carry `SessionId` and `RunId`; tool scopes add `ToolCallId` and `ToolName`. Completion records include duration, outcome/error code, and available token counts. Unknown tool names are logged as `unrecognized` rather than echoing arbitrary model-generated text.
+Diagnostics are written through Serilog to `logs/expense-assistant-YYYYMMDD.jsonl` beside the application output (for example, `src/ExpenseAssistant.App/bin/Debug/net10.0/logs/`). Each line is a JSON event with a timestamp, level, message template, rendered message, and structured properties. Files roll daily and when they reach 10 MB; at most seven files are retained, so high-volume size rolls may retain less than seven days. The log directory is already excluded by `.gitignore`. The logger is disposed after the host to flush and close files during normal shutdown.
+
+Console diagnostic providers are removed; the terminal retains chat prompts, assistant answers, usage, session/run summaries, and the seed-only confirmation. File events cover database initialization, run start/completion, both model requests, and each tool's validation/execution. Log scopes carry `SessionId` and `RunId`; tool scopes add `ToolCallId` and `ToolName`. Completion records include duration, outcome/error code, and available token counts. Unknown tool names are logged as `unrecognized` rather than echoing arbitrary model-generated text.
 
 `ActivitySource` named `ExpenseAssistant.App.ToolChatRunner` exposes this span hierarchy:
 
@@ -126,9 +128,9 @@ assistant.run
 	model.final (only when the initial response requests tools)
 ```
 
-Spans include correlation IDs, timing, outcome, and available model usage; tool spans also contain call IDs, allowlisted names, and error codes. Attach an `ActivityListener` or configure an OpenTelemetry listener for this source to collect spans. No tracing backend or exporter is required for console logging, and spans are not collected without a listener.
+Spans include correlation IDs, timing, outcome, and available model usage; tool spans also contain call IDs, allowlisted names, and error codes. Attach an `ActivityListener` or configure an OpenTelemetry listener for this source to collect spans. No tracing backend or exporter is required for file logging, and spans are not collected without a listener.
 
-Prompts, model response text, tool arguments/results, transaction descriptions, credentials, and raw exception details are not logged. The interactive assistant answer is still printed normally. EF Core SQL logging remains suppressed below Warning. Override `Logging:LogLevel:ExpenseAssistant.App.ToolChatRunner` through configuration to change log verbosity.
+Prompts, model response text, tool arguments/results, transaction descriptions, credentials, and raw exception details are not logged by the runner. The interactive assistant answer is still printed normally. Serilog defaults to Information, with EF Core and host-lifetime events restricted to Warning and above. These levels are set explicitly in the logger configuration in `Program.cs`; existing `Logging:LogLevel` settings do not control this Serilog provider. Leave EF Core sensitive-data logging disabled.
 
 The console's `Run usage` comes from `ChatRunResult.Usage`, summing the initial and final model requests without changing either response's own usage metadata. If any request omits usage, the aggregate is unknown; a missing individual count also remains unknown rather than being treated as zero. Per-request logs retain whatever usage the provider supplies.
 
