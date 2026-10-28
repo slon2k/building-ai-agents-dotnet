@@ -75,6 +75,22 @@ Run the database tests with:
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ExpenseDbContextTests
 ```
 
+### Transaction queries
+
+Core defines `ITransactionQueries` and read-only result records; Infrastructure implements it with `TransactionQueries`. Both operations use an inclusive start date and exclusive end date, accept an optional exact category ID, and pass cancellation through to EF Core. Unknown or blank category IDs and invalid date ranges are rejected with argument exceptions.
+
+Search returns transaction DTOs ordered by date, then ID. The default limit is 20, with allowed limits of 1-100. `ReturnedCount` describes the returned subset; `HasMore` indicates omitted matches, determined by fetching one extra row. Merchant filtering uses a trimmed, literal substring with SQLite's default ASCII case-insensitive `LIKE` behavior. Percent and underscore characters are escaped, not treated as wildcards; blank merchant filters are rejected.
+
+Summaries have no result limit. They load all matching amount/category/currency projections and aggregate exact `decimal` values in application code, avoiding SQLite decimal-aggregation limitations. This is appropriate for the small course fixture, not a large-data aggregation strategy. The configured currency defaults to EUR, including empty results; matching transactions in another currency cause a failure rather than a misleading combined total.
+
+Database and cancellation failures propagate to the caller; they are not converted into successful empty results. Mapping failures into safe model-facing tool responses is a later step.
+
+Run the query tests with:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~TransactionQueriesTests
+```
+
 ## Safety and scope
 
 - Keep credentials outside source control. A .NET gitignore alone does not guarantee that secrets are excluded.
