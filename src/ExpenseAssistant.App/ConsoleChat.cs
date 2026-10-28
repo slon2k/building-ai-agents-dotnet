@@ -49,7 +49,7 @@ public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 			{
 				case { Status: ChatRunStatus.Completed, Response: { } response }:
 					response.PrintResponse();
-					response.PrintMetadata();
+					result.PrintMetadata();
 					break;
 				case { Status: ChatRunStatus.Cancelled }:
 					Console.WriteLine("[cancelled]");

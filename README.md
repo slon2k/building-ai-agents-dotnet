@@ -113,6 +113,33 @@ Run the offline orchestration tests with:
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ToolChatRunnerTests
 ```
 
+### Logging and tracing
+
+The console emits timestamped structured logs for run start/completion, both model requests, and each tool's validation/execution. Log scopes carry `SessionId` and `RunId`; tool scopes add `ToolCallId` and `ToolName`. Completion records include duration, outcome/error code, and available token counts. Unknown tool names are logged as `unrecognized` rather than echoing arbitrary model-generated text.
+
+`ActivitySource` named `ExpenseAssistant.App.ToolChatRunner` exposes this span hierarchy:
+
+```text
+assistant.run
+	model.initial
+	tool.execute (one per requested call, including rejected calls)
+	model.final (only when the initial response requests tools)
+```
+
+Spans include correlation IDs, timing, outcome, and available model usage; tool spans also contain call IDs, allowlisted names, and error codes. Attach an `ActivityListener` or configure an OpenTelemetry listener for this source to collect spans. No tracing backend or exporter is required for console logging, and spans are not collected without a listener.
+
+Prompts, model response text, tool arguments/results, transaction descriptions, credentials, and raw exception details are not logged. The interactive assistant answer is still printed normally. EF Core SQL logging remains suppressed below Warning. Override `Logging:LogLevel:ExpenseAssistant.App.ToolChatRunner` through configuration to change log verbosity.
+
+The console's `Run usage` comes from `ChatRunResult.Usage`, summing the initial and final model requests without changing either response's own usage metadata. If any request omits usage, the aggregate is unknown; a missing individual count also remains unknown rather than being treated as zero. Per-request logs retain whatever usage the provider supplies.
+
+Run the offline telemetry tests with:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ToolChatRunnerTelemetryTests
+```
+
+If a running Windows console process locks Debug assemblies, add `--configuration Release` to the test command instead of stopping that session.
+
 ## Safety and scope
 
 - Keep credentials outside source control. A .NET gitignore alone does not guarantee that secrets are excluded.

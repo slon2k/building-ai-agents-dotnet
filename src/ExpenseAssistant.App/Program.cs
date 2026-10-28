@@ -25,6 +25,12 @@ builder.Configuration
 	.AddUserSecrets<Program>(optional: true)
 	.AddEnvironmentVariables();
 
+builder.Logging.AddSimpleConsole(options =>
+{
+	options.IncludeScopes = true;
+	options.SingleLine = true;
+	options.TimestampFormat = "HH:mm:ss ";
+});
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
 
@@ -67,7 +73,8 @@ builder.Services.AddScoped(services =>
 		services.GetRequiredService<ExpenseTools>(),
 		TimeSpan.FromSeconds(options.RequestTimeoutSeconds),
 		options.SystemPrompt,
-		options.MaxToolCalls);
+		options.MaxToolCalls,
+		services.GetRequiredService<ILogger<ToolChatRunner>>());
 });
 builder.Services.AddSingleton<ConsoleChat>();
 
