@@ -34,9 +34,9 @@ public sealed record ToolResult<TResult> where TResult : class
 
     public Error? Error { get; }
 
-    public static ToolResult<TResult> Success(TResult result) => new(true, result);
+    public static ToolResult<TResult> Success(TResult result) => new(isSuccess: true, result: result);
 
-    public static ToolResult<TResult> Failure(Error error) => new(false, default, error);
+    public static ToolResult<TResult> Failure(Error error) => new(isSuccess: false, error: error);
 
     public static implicit operator ToolResult<TResult>(TResult result) => Success(result);
 

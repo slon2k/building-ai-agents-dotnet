@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 using System.Text.Json;
 using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
@@ -272,7 +271,7 @@ public sealed class ToolChatRunner
 
         foreach (JsonProperty argument in arguments.EnumerateObject())
         {
-            if (!properties.TryGetProperty(argument.Name, out _) || !IsValidArgument(argument.Name, argument.Value))
+            if (!properties.TryGetProperty(argument.Name, out _))
             {
                 return Failure("INVALID_ARGUMENTS", "Use supported arguments, YYYY-MM-DD dates, string filters, and an integer limit.");
             }
@@ -295,15 +294,6 @@ public sealed class ToolChatRunner
             return Failure("TOOL_FAILED", "The tool could not be executed. No result is available.");
         }
     }
-
-    private static bool IsValidArgument(string name, JsonElement value) => name switch
-    {
-        "startDate" or "endDate" => value.ValueKind == JsonValueKind.String
-            && DateOnly.TryParseExact(value.GetString(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _),
-        "categoryId" or "merchantText" => value.ValueKind is JsonValueKind.String or JsonValueKind.Null,
-        "limit" => value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out _),
-        _ => false
-    };
 
     private static ToolResult<object> Failure(string code, string message) => new Error(code, message);
 }
