@@ -130,6 +130,8 @@ A completed run does **not** necessarily mean the user’s task succeeded. A cla
 
 ## Implementation plan
 
+The examples below illustrate responsibilities, not a required class layout. Choose an implementation that satisfies the behavioral requirements, and record design decisions and verification evidence in the cumulative checkpoint.
+
 ### Part 1 — Extract an agent runner
 
 Introduce an application component responsible for orchestration:
@@ -224,6 +226,8 @@ Preserve:
 - Their execution order.
 
 Do not replace tool results with invented assistant messages or omit failed calls.
+
+When a model response contains several messages, preserve the tool-call/result ordering required by the provider. If a batch is interrupted, any history reused by later model requests must still contain valid exchanges. Discarding partial history does not roll back operations that already executed.
 
 This will also matter when we introduce context trimming in Module 5.
 

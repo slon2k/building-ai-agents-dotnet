@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;

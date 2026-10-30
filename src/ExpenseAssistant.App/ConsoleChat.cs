@@ -1,4 +1,3 @@
-using ExpenseAssistant.Core;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ExpenseAssistant.App;
@@ -29,8 +28,8 @@ public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 
 			using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			await using AsyncServiceScope scope = scopeFactory.CreateAsyncScope();
-			ToolChatRunner runner = scope.ServiceProvider.GetRequiredService<ToolChatRunner>();
-			Task<ChatRunResult> runTask = runner.RunAsync(SessionId, input, cts.Token);
+			AgentRunner runner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
+			Task<AgentRunResult> runTask = runner.RunAsync(SessionId, input, cts.Token);
 
 			// .NET has no async key read, so poll for Esc while the request runs.
 			while (!runTask.IsCompleted)
@@ -43,15 +42,15 @@ public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 				await Task.Delay(50);
 			}
 
-			ChatRunResult result = await runTask;
+			AgentRunResult result = await runTask;
 
 			switch (result)
 			{
-				case { Status: ChatRunStatus.Completed, Response: { } response }:
+				case { Status: AgentRunStatus.Completed, Response: { } response }:
 					response.PrintResponse();
 					result.PrintMetadata();
 					break;
-				case { Status: ChatRunStatus.Cancelled }:
+				case { Status: AgentRunStatus.Cancelled }:
 					Console.WriteLine("[cancelled]");
 					break;
 				default:

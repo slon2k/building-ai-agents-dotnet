@@ -1,4 +1,3 @@
-using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
 
 namespace ExpenseAssistant.App;
@@ -14,6 +13,12 @@ internal static class ChatResponseExtensions
     {
         Console.WriteLine($"Finish reason: {response.FinishReason}");
         PrintUsage(response.Usage, "Usage");
+    }
+
+    internal static void PrintMetadata(this AgentRunResult result)
+    {
+        Console.WriteLine($"Finish reason: {result.Response?.FinishReason}");
+        PrintUsage(result.Usage, "Run usage");
     }
 
     internal static void PrintMetadata(this ChatRunResult result)

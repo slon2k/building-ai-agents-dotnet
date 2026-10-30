@@ -2,7 +2,6 @@ using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text.Json;
 using ExpenseAssistant.App;
-using ExpenseAssistant.Core;
 using ExpenseAssistant.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
