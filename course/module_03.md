@@ -152,6 +152,8 @@ Keep responsibilities separate:
 
 Avoid building a general-purpose framework. Implement only what this project needs.
 
+Keep `ChatRunner` and `ToolChatRunner` unchanged as historical exercises. Add `AgentRunner` with a separate `ToolDispatcher`, reusing the existing expense tools and query services. In Part 1, keep the executable single-round behavior and current result contract while establishing these responsibilities. Leave console and evaluation routing unchanged until the agent path is ready. The new run contracts and repeated execution arrive in Parts 2 and 3; Part 1 alone is not yet a multi-step agent.
+
 ### Part 2 — Define run options and results
 
 Example execution options:

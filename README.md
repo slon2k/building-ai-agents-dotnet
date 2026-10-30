@@ -113,6 +113,18 @@ Run the offline orchestration tests with:
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ToolChatRunnerTests
 ```
 
+### Module 3 runner boundary
+
+The exercises retain separate runners so the progression remains visible: `ChatRunner` is the model-only example, `ToolChatRunner` is the self-contained single tool round, and `AgentRunner` is the starting point for Module 3. The console and tool-mode evaluations still use `ToolChatRunner`; no runner selection or routing change has been introduced.
+
+Part 1 implements `AgentRunner` with the same single-round behavior and existing `ChatRunResult`. Its `ToolDispatcher` owns function lookup, schema-based required/property checks, argument binding, and safe invocation errors; business validation remains in `ExpenseTools`. The runner owns message ordering, the tool-call cap, the shared request deadline, usage aggregation, and diagnostics. Excess calls receive matching `TOOL_CALL_LIMIT` results without execution. A final request disables tools; another tool request fails the run. Neither historical runner was refactored to use the dispatcher.
+
+The new runner exposes correlated spans through `ExpenseAssistant.App.AgentRunner` and uses `ILogger<AgentRunner>` without logging prompts, response text, or tool payloads. It accepts a dispatcher constructed from `new ExpenseTools(queries).CreateFunctions()`. It is currently invoked through offline tests, not the interactive app. New options/results, model-step budgets and repeated model/tool cycles belong to Parts 2 and 3.
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunner
+```
+
 ### Logging and tracing
 
 Diagnostics are written through Serilog to `logs/expense-assistant-YYYYMMDD.jsonl` beside the application output (for example, `src/ExpenseAssistant.App/bin/Debug/net10.0/logs/`). Each line is a JSON event with a timestamp, level, message template, rendered message, and structured properties. Files roll daily and when they reach 10 MB; at most seven files are retained, so high-volume size rolls may retain less than seven days. The log directory is already excluded by `.gitignore`. The logger is disposed after the host to flush and close files during normal shutdown.

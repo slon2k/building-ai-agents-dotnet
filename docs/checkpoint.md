@@ -180,3 +180,28 @@ The following is a review of one observed batch, not a reliability guarantee. Th
 ### Next action
 
 Run and record Experiment A, retain the qualified review findings, and then close Module 2. Module 3 will generalize the bounded tool round into multi-step orchestration with explicit terminal states and budgets.
+
+## Module 3 Part 1 Checkpoint
+
+### Implemented boundary
+
+- Recorded on 2026-10-30 for the working-tree implementation, not a new commit or completion of all Module 3 parts.
+- Separate `AgentRunner` coordinates the current single tool round through `IChatClient` and `ToolDispatcher`. `ChatRunner`, `ToolChatRunner`, their tests, and current console/evaluation routing remain unchanged.
+- The dispatcher handles registered function lookup, schema-based property/required checks, type binding and safe invocation errors. Business validation remains in `ExpenseTools`; parameter names/types are not hard-coded into the new runner.
+- The runner preserves assistant messages and matching call IDs, executes tools sequentially, limits executed calls, disables tools for the final request, and fails if that response requests further tools. Excess requests receive matching `TOOL_CALL_LIMIT` results without execution.
+- One linked deadline covers both model requests and tool execution. Caller cancellation and timeout return distinct existing `ChatRunStatus` values. Unsupported timeout values are rejected during construction.
+- Existing `ChatRunResult` and usage aggregation semantics are retained. Run IDs are distinct; a missing usage report or individual token count stays unknown.
+- Correlated logs and spans use `ILogger<AgentRunner>` and `ExpenseAssistant.App.AgentRunner`. Tests check outcomes, parent/child correlation, timing, usage, allowlisted tool names and omission of prompts, tool payloads and raw exception details.
+
+### Verification
+
+- `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunner`: passed, 30 tests, 0 failures.
+- `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 176 tests, 0 failures. The historical runner and evaluation tests remain unchanged.
+- Editor diagnostics reported no errors in the new runner or tests; `git diff --check` passed before this documentation append.
+- All new checks use scripted clients and local functions. No paid model calls, console smoke test, or live agent evaluation was performed.
+
+### Remaining scope
+
+- `AgentRunner` is test-invokable but is not yet selected by the interactive app or evaluation CLI.
+- New run options/results, model-step counters and `BudgetExceeded` belong to Part 2. Repeated model/tool cycles and whole-batch remaining-budget enforcement belong to Part 3.
+- This checkpoint does not close the earlier Module 2 live-experiment limitations or claim a functioning multi-step agent.
