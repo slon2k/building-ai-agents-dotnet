@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
 
 namespace ExpenseAssistant.App;
@@ -44,3 +43,20 @@ public sealed class ChatRunner(IChatClient chatClient, TimeSpan requestTimeout, 
         }
     }
 }
+
+public enum ChatRunStatus
+{
+    Completed,
+    Cancelled,
+    TimedOut,
+    Failed
+}
+
+public sealed record ChatRunResult(
+    Guid SessionId,
+    Guid RunId,
+    ChatRunStatus Status,
+    TimeSpan Duration,
+    ChatResponse? Response = null,
+    string? Error = null,
+    UsageDetails? Usage = null);

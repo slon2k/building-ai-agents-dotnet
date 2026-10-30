@@ -1,4 +1,3 @@
-using ExpenseAssistant.Core;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ExpenseAssistant.App;

@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using ExpenseAssistant.App;
-using ExpenseAssistant.Core;
 using ExpenseAssistant.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;

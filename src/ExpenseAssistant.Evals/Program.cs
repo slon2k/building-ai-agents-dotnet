@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ExpenseAssistant.App;
-using ExpenseAssistant.Core;
 using ExpenseAssistant.Evals;
 using ExpenseAssistant.Infrastructure;
 using Microsoft.EntityFrameworkCore;
