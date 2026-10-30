@@ -74,19 +74,9 @@ builder.Services.AddSingleton(services =>
 	return options;
 });
 
-builder.Services.AddSingleton<IChatClient>(services =>
-	AzureOpenAIChatClientFactory.Create(services.GetRequiredService<AzureOpenAIOptions>()));
-builder.Services.AddScoped(services =>
-{
-	AssistantOptions options = services.GetRequiredService<AssistantOptions>();
-	return new ToolChatRunner(
-		services.GetRequiredService<IChatClient>(),
-		services.GetRequiredService<ExpenseTools>(),
-		TimeSpan.FromSeconds(options.RequestTimeoutSeconds),
-		options.SystemPrompt,
-		options.MaxToolCalls,
-		services.GetRequiredService<ILogger<ToolChatRunner>>());
-});
+builder.Services.AddChatClient();
+builder.Services.AddAgentRunner();
+builder.Services.AddToolChatRunner();
 builder.Services.AddSingleton<ConsoleChat>();
 
 using IHost host = builder.Build();

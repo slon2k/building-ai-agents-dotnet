@@ -303,3 +303,14 @@ Run and record Experiment A, retain the qualified review findings, and then clos
 - A JSON file-sink test records three model steps and three tool calls, verifies ordered step/call correlation and aggregate usage, and checks payload omission after flushing the logger.
 - Tool cancellation/duration tests verify child outcomes, stop reasons and correlation. SDK tests verify actual attempt spans/counts, count reset, backoff cancellation and secret/endpoint omission using the real SDK/adapter with a fake HTTP handler.
 - Editor diagnostics reported no errors in the changed source/test files. Verification was offline; no paid model calls, live exporter test, interactive smoke test or multistep behavioral evaluation was performed. Module 3's live behavioral evidence remains pending.
+
+## Module 3 Console Integration
+
+- Recorded on 2026-10-30 for the working-tree implementation, following the user's console changes to use `AgentRunner` and `AgentRunResult`.
+- Startup now calls `AddAgentRunner()`, which registers scoped `ToolDispatcher` and `AgentRunner` instances. The same registration method is exercised by console integration tests rather than duplicated in a test-only setup.
+- The agent receives the existing assistant prompt, tool-call cap and timeout settings; its model-step limit uses the default of six. The existing console configuration defaults to four attempted tool calls and 30 seconds. Historical runners remain unchanged and `ToolChatRunner` stays registered; evaluation routing has not migrated to the agent.
+- Fixed a shutdown lifetime race by keeping the polling delay independent of host cancellation. The run token is still cancelled, but the console awaits the run before disposing its scope, even when provider cleanup takes additional time.
+- `ConsoleChatTests` verifies a console-to-agent/tool round and output, distinct scoped runners/dispatchers, and delayed cancellation cleanup while the scope remains alive. Tests restore redirected console streams and run in a nonparallel collection.
+- `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~ConsoleChatTests`: passed, 3 tests, 0 failures.
+- `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 225 tests, 0 failures. Editor diagnostics reported no errors in the changed source/test files.
+- Verification used a scripted model client and fake query service. No live model call, real terminal Esc test, production shutdown experiment or multistep behavioral evaluation was performed; Module 3's live evidence remains pending.

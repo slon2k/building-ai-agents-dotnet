@@ -15,6 +15,12 @@ internal static class ChatResponseExtensions
         PrintUsage(response.Usage, "Usage");
     }
 
+    internal static void PrintMetadata(this AgentRunResult result)
+    {
+        Console.WriteLine($"Finish reason: {result.Response?.FinishReason}");
+        PrintUsage(result.Usage, "Run usage");
+    }
+
     internal static void PrintMetadata(this ChatRunResult result)
     {
         Console.WriteLine($"Finish reason: {result.Response?.FinishReason}");
