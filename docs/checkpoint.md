@@ -314,3 +314,45 @@ Run and record Experiment A, retain the qualified review findings, and then clos
 - `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~ConsoleChatTests`: passed, 3 tests, 0 failures.
 - `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 225 tests, 0 failures. Editor diagnostics reported no errors in the changed source/test files.
 - Verification used a scripted model client and fake query service. No live model call, real terminal Esc test, production shutdown experiment or multistep behavioral evaluation was performed; Module 3's live evidence remains pending.
+
+## Module 3 Live Console Verification
+
+### Evidence and Scope
+
+- Verification date: 2026-10-30. The user ran `dotnet run --project src/ExpenseAssistant.App`, completed the suggested interactive checks and reported that everything behaved correctly. The terminal context reports exit code 0; the assistant did not rerun the application or make additional model calls.
+- Manual coverage reported by the user: highest-spending category with supporting purchases; limited search versus complete summary; merchant search; empty period; missing/reversed dates; a general expense explanation; unsupported deletion; budget exhaustion; and cancellation. This is user-reviewed interactive evidence, not an independently captured transcript or an automated agent evaluation report.
+- Inspected local [structured log](../src/ExpenseAssistant.App/bin/Debug/net10.0/logs/expense-assistant-20261030.jsonl), 52,361 bytes. SHA-256 at inspection: `5ACBD4C73E26B148C4D03DC6C0DDD3D7720DAD8AFE49BB7CDBB2B1102274AFCB`. This file is Git-ignored and will not be available in a clean clone; later logging can change its hash.
+- Session ID: `d48f6bc9-279e-42a6-b613-f94254bba266`. Observed run window: 16:16:23-16:20:23, UTC+05:00. Database initialization logged dataset version `v1`; that label alone does not independently verify every stored fixture value.
+- Run-start records show `MaxModelSteps=6`, `MaxToolCalls=4`, and `MaxDurationMs=30000`. Prompts, arguments, result payloads and answer text are intentionally absent from these normal logs. The run rows below are chronological execution evidence, not a verified mapping of each prompt to a run ID.
+
+### Observed Runs
+
+| Order | Run ID | Outcome | Model Steps | Tool Attempts | Duration (s) | Reported Total Tokens | Log Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `9f27cf2b-2a3a-49f1-9dbb-c5fad30e9e29` | Completed | 3 | 2 | 13.270 | 4750 | Step 1 summary, step 2 search, step 3 final response. |
+| 2 | `67613cae-e2c5-43bd-9e6e-57ad80fb921f` | Completed | 2 | 2 | 8.473 | 2669 | Search and summary in step 1, then final response. |
+| 3 | `0d7a844e-f16b-4ca8-9ac6-c7f7d83428c5` | Completed | 2 | 1 | 9.812 | 2780 | Search followed by final response. |
+| 4 | `fc26b949-d7c4-4d3d-b2da-b4cb9f669ac0` | Completed | 2 | 1 | 5.907 | 2075 | Summary followed by final response. |
+| 5 | `072b9289-7b01-4867-9a17-3aee427c40ba` | Completed | 1 | 0 | 5.309 | 1467 | Direct response, no tool execution. |
+| 6 | `b301a543-67a7-439a-9e0c-4245daa28b92` | Completed | 1 | 0 | 5.089 | 1329 | Direct response, no tool execution. |
+| 7 | `b52712cb-712c-4a9d-8736-bc6f87d4960f` | Completed | 1 | 0 | 6.205 | 1778 | Direct response, no tool execution. |
+| 8 | `ecba5456-6b0e-4072-b31a-346658524a0d` | Completed | 1 | 0 | 7.196 | 1950 | Direct response, no tool execution. |
+| 9 | `e0674f90-2cba-408f-b406-e47fce5a6554` | BudgetExceeded | 2 | 9 | 15.155 | 6048 | One search completed; eight later calls rejected as a whole batch. |
+| 10 | `6911ed45-6222-4546-9427-0fd5e5e45593` | Cancelled | 1 | 0 | 0.810 | Unknown | First model request cancelled; no tool execution. |
+
+### Interpretation and Limits
+
+- Eight runs completed, one stopped with `BudgetExceeded`/`ToolCallLimit`, and one was cancelled. No run ended `Failed` or exceeded the duration limit. Seven tool executions were logged as completed; eight further requests were explicitly rejected.
+- Run 1 confirms a live repeated model/tool cycle with a summary followed by a search on a later step. The log does not expose arguments or results, so actual data dependency and answer grounding are supported by the user's review, not independently reconstructed from logging.
+- Run 9 had three tool slots remaining when the model requested eight calls in step 2. All eight received rejection records, with no tool execution afterward and no third model request. The count of nine is one executed call plus eight rejected attempts, not nine executions or an execution-cap breach.
+- Run 10 confirms live cancellation propagation, but the log does not distinguish an Esc press from other caller cancellation. No subsequent run appears in this batch, so post-cancellation console usability remains covered by offline tests rather than this live log.
+- Retry counts are null in the model events; do not interpret this as zero retries. No collected provider-attempt trace is present in this file. Token usage is unknown for the cancelled request and does not establish total billed cost.
+- Normal logs cannot independently verify exact date/category arguments, EUR 21.25/two-transaction fixture correctness, response wording, refusal quality or unchanged database contents. The user's positive review is retained as manual evidence; deterministic fixture/state tests provide separate coverage.
+- The latest assistant-verified deterministic suite remains 225 passing tests from console integration. Tests were not rerun for this documentation-only update.
+
+### Remaining Module Evidence
+
+- The interactive agent path now has a user-reviewed live batch with matching execution evidence. Historical limitations above describe earlier stages and are not rewritten.
+- Agent-mode evaluation CLI scenarios with stable IDs and saved synthetic payload evidence are not yet implemented. The existing evaluation CLI still exercises earlier runners.
+- A controlled reduced-model-step-budget experiment, injected recoverable-failure live experiment, and controlled model/repetition comparison are not established by this single batch. Keep these limitations explicit before claiming every Module 3 experiment is complete; scripted budget/recovery tests already pass.
+- Course exercises and completion checklists were not changed by this evidence append.
