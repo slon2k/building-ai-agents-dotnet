@@ -49,6 +49,7 @@ public sealed class AgentRunner
 		using IDisposable? logScope = logger.BeginScope("SessionId:{SessionId} RunId:{RunId}", sessionId, runId);
 		using Activity? runActivity = StartSpan("assistant.run");
 		List<UsageDetails?> modelUsages = [];
+		HashSet<string> callIds = new(StringComparer.Ordinal);
 		int toolCallCount = 0;
 		using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 		timeoutCts.CancelAfter(requestTimeout);
@@ -63,49 +64,68 @@ public sealed class AgentRunner
 				new(ChatRole.System, systemPrompt),
 				new(ChatRole.User, userInput)
 			];
-			ChatResponse response = await RequestModelAsync(messages,
-				new ChatOptions { Tools = dispatcher.Functions.Cast<AITool>().ToList() }, "initial", runToken);
-			runToken.ThrowIfCancellationRequested();
-
-			FunctionCallContent[] calls = response.Messages
-				.SelectMany(message => message.Contents).OfType<FunctionCallContent>().ToArray();
-
-			if (calls.Length > 0)
+			while (true)
 			{
-				if (calls.Any(call => string.IsNullOrWhiteSpace(call.CallId))
-					|| calls.Select(call => call.CallId).Distinct(StringComparer.Ordinal).Count() != calls.Length)
-				{
-					return Result(AgentRunStatus.Failed, error: "The model returned invalid tool-call identifiers.");
-				}
-
-				messages.AddRange(response.Messages);
-				List<AIContent> results = [];
-				for (int index = 0; index < calls.Length; index++)
-				{
-					runToken.ThrowIfCancellationRequested();
-					FunctionCallContent call = calls[index];
-					object? result = await ExecuteToolAsync(call, index >= maxToolCalls, runToken);
-					results.Add(new FunctionResultContent(call.CallId, result));
-				}
-
-				messages.Add(new ChatMessage(ChatRole.Tool, results));
+				runToken.ThrowIfCancellationRequested();
 				if (modelUsages.Count >= maxModelSteps)
 				{
 					return Result(AgentRunStatus.BudgetExceeded,
 						error: "The model-step limit was reached before a final answer was available.",
 						stopReason: AgentStopReason.ModelStepLimit);
 				}
-				response = await RequestModelAsync(messages,
-					new ChatOptions { ToolMode = ChatToolMode.None }, "final", runToken);
+				if (toolCallCount >= maxToolCalls)
+				{
+					return Result(AgentRunStatus.BudgetExceeded,
+						error: "The tool-call limit was reached before a final answer was available.",
+						stopReason: AgentStopReason.ToolCallLimit);
+				}
+
+				ChatResponse response = await RequestModelAsync(messages,
+					new ChatOptions { Tools = dispatcher.Functions.Cast<AITool>().ToList() }, runToken);
 				runToken.ThrowIfCancellationRequested();
 
-				if (response.Messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>().Any())
+				FunctionCallContent[] calls = response.Messages
+					.SelectMany(message => message.Contents).OfType<FunctionCallContent>().ToArray();
+				if (calls.Length == 0)
 				{
-					return Result(AgentRunStatus.Failed, error: "The model requested additional tools after the bounded tool round.");
+					return Result(AgentRunStatus.Completed, response);
 				}
-			}
 
-			return Result(AgentRunStatus.Completed, response);
+				if (calls.Any(call => string.IsNullOrWhiteSpace(call.CallId))
+					|| calls.Any(call => !callIds.Add(call.CallId)))
+				{
+					return Result(AgentRunStatus.Failed, error: "The model returned invalid tool-call identifiers.");
+				}
+
+				int remainingToolCalls = maxToolCalls - toolCallCount;
+				if (calls.Length > remainingToolCalls)
+				{
+					toolCallCount += calls.Length;
+					logger.LogWarning("Tool batch rejected RequestedToolCalls={RequestedToolCalls} RemainingToolCalls={RemainingToolCalls}",
+						calls.Length, remainingToolCalls);
+					foreach (FunctionCallContent call in calls)
+					{
+						string toolName = dispatcher.Functions.Any(function => function.Name == call.Name) ? call.Name : "unrecognized";
+						logger.LogWarning("Tool request rejected ToolCallId={ToolCallId} ToolName={ToolName} ErrorCode={ErrorCode}",
+							call.CallId, toolName, "TOOL_CALL_LIMIT");
+					}
+					return Result(AgentRunStatus.BudgetExceeded,
+						error: "The requested tool batch exceeded the remaining tool-call budget. No calls in the batch were executed.",
+						stopReason: AgentStopReason.ToolCallLimit);
+				}
+
+				List<AIContent> results = [];
+				foreach (FunctionCallContent call in calls)
+				{
+					runToken.ThrowIfCancellationRequested();
+					object? result = await ExecuteToolAsync(call, runToken);
+					runToken.ThrowIfCancellationRequested();
+					results.Add(new FunctionResultContent(call.CallId, result));
+				}
+
+				messages.AddRange(response.Messages);
+				messages.Add(new ChatMessage(ChatRole.Tool, results));
+			}
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
 		{
@@ -150,13 +170,15 @@ public sealed class AgentRunner
 		}
 
 		async Task<ChatResponse> RequestModelAsync(
-			List<ChatMessage> messages, ChatOptions options, string phase, CancellationToken token)
+			List<ChatMessage> messages, ChatOptions options, CancellationToken token)
 		{
-			using Activity? activity = StartSpan($"model.{phase}", ActivityKind.Client);
+			int step = modelUsages.Count + 1;
+			using Activity? activity = StartSpan("model.step", ActivityKind.Client);
+			activity?.SetTag("model.step", step);
 			long started = Stopwatch.GetTimestamp();
 			int usageIndex = modelUsages.Count;
 			modelUsages.Add(null);
-			logger.LogInformation("Model request started Phase={Phase}", phase);
+			logger.LogInformation("Model request started Step={Step}", step);
 			try
 			{
 				ChatResponse response = await chatClient.GetResponseAsync(messages, options, token);
@@ -165,8 +187,8 @@ public sealed class AgentRunner
 				SetUsageTags(activity, response.Usage);
 				activity?.SetTag("gen_ai.response.model", response.ModelId);
 				logger.LogInformation(
-					"Model request finished Phase={Phase} Outcome={Outcome} DurationMs={DurationMs} InputTokens={InputTokens} OutputTokens={OutputTokens} TotalTokens={TotalTokens}",
-					phase, "Completed", Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+					"Model request finished Step={Step} Outcome={Outcome} DurationMs={DurationMs} InputTokens={InputTokens} OutputTokens={OutputTokens} TotalTokens={TotalTokens}",
+					step, "Completed", Stopwatch.GetElapsedTime(started).TotalMilliseconds,
 					response.Usage?.InputTokenCount, response.Usage?.OutputTokenCount, response.Usage?.TotalTokenCount);
 				return response;
 			}
@@ -174,8 +196,8 @@ public sealed class AgentRunner
 			{
 				string code = CancellationCode(exception);
 				FinishSpan(activity, code, code);
-				logger.LogWarning("Model request failed Phase={Phase} ErrorCode={ErrorCode} DurationMs={DurationMs}",
-					phase, code, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+				logger.LogWarning("Model request failed Step={Step} ErrorCode={ErrorCode} DurationMs={DurationMs}",
+					step, code, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
 				throw;
 			}
 			finally
@@ -184,7 +206,7 @@ public sealed class AgentRunner
 			}
 		}
 
-		async Task<object?> ExecuteToolAsync(FunctionCallContent call, bool overLimit, CancellationToken token)
+		async Task<object?> ExecuteToolAsync(FunctionCallContent call, CancellationToken token)
 		{
 			toolCallCount++;
 			string toolName = dispatcher.Functions.Any(function => function.Name == call.Name) ? call.Name : "unrecognized";
@@ -192,13 +214,12 @@ public sealed class AgentRunner
 			using Activity? activity = StartSpan("tool.execute");
 			activity?.SetTag("tool.call.id", call.CallId);
 			activity?.SetTag("tool.name", toolName);
+			activity?.SetTag("model.step", modelUsages.Count);
 			long started = Stopwatch.GetTimestamp();
 			logger.LogInformation("Tool validation and execution started");
 			try
 			{
-				object? result = overLimit
-					? ToolResult<object>.Failure(new Error("TOOL_CALL_LIMIT", "This request exceeded the tool-call limit. The tool was not executed."))
-					: await dispatcher.InvokeAsync(call, token);
+				object? result = await dispatcher.InvokeAsync(call, token);
 				JsonElement envelope = JsonSerializer.SerializeToElement(result, JsonSerializerOptions.Web);
 				bool success = envelope.ValueKind != JsonValueKind.Object
 					|| !envelope.TryGetProperty("isSuccess", out JsonElement isSuccess) || isSuccess.GetBoolean();

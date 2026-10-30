@@ -12,7 +12,6 @@ public class AgentRunnerTelemetryTests
     [InlineData("success", null)]
     [InlineData("unknown", "UNKNOWN_TOOL")]
     [InlineData("failure", "QUERY_FAILED")]
-    [InlineData("limit", "TOOL_CALL_LIMIT")]
     public async Task RunAsync_RecordsCorrelatedSpansAndSafeLogs(string scenario, string? errorCode)
     {
         Guid sessionId = Guid.NewGuid();
@@ -25,11 +24,6 @@ public class AgentRunnerTelemetryTests
         string name = scenario == "unknown" ? "PRIVATE_TOOL_NAME" : "Summary";
         List<AIContent> calls = [new FunctionCallContent("call-1", name,
             new Dictionary<string, object?> { ["value"] = "PRIVATE_ARGUMENT" })];
-        if (scenario == "limit")
-        {
-            calls.Add(new FunctionCallContent("call-2", name,
-                new Dictionary<string, object?> { ["value"] = "PRIVATE_ARGUMENT" }));
-        }
         Queue<ChatResponse> responses = new([
             new ChatResponse(new ChatMessage(ChatRole.Assistant, calls))
             {
@@ -42,17 +36,17 @@ public class AgentRunnerTelemetryTests
         ]);
         var client = new FakeChatClient((_, _) => Task.FromResult(responses.Dequeue()));
         var runner = new AgentRunner(client, new ToolDispatcher([function]),
-            "PRIVATE_SYSTEM_PROMPT", new AgentRunOptions(MaxToolCalls: 1), logger);
+            "PRIVATE_SYSTEM_PROMPT", new AgentRunOptions(MaxToolCalls: 3), logger);
 
         AgentRunResult result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", CancellationToken.None);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal(scenario == "limit" ? 5 : 4, spans.Count);
+        Assert.Equal(4, spans.Count);
         Activity root = Assert.Single(spans, span => span.OperationName == "assistant.run");
         Assert.Equal(ActivityStatusCode.Ok, root.Status);
         Assert.Equal("Completed", root.GetTagItem("outcome"));
         Assert.Equal(2, root.GetTagItem("model.steps"));
-        Assert.Equal(scenario == "limit" ? 2 : 1, root.GetTagItem("tool.calls"));
+        Assert.Equal(1, root.GetTagItem("tool.calls"));
         Assert.Equal(38L, root.GetTagItem("gen_ai.usage.total_tokens"));
         Assert.All(spans, span =>
         {
@@ -65,8 +59,10 @@ public class AgentRunnerTelemetryTests
                 Assert.Equal(root.TraceId, span.TraceId);
             }
         });
-        Assert.Single(spans, span => span.OperationName == "model.initial" && span.Kind == ActivityKind.Client);
-        Assert.Single(spans, span => span.OperationName == "model.final" && span.Kind == ActivityKind.Client);
+        Activity[] models = spans.Where(span => span.OperationName == "model.step").ToArray();
+        Assert.Equal(2, models.Length);
+        Assert.All(models, span => Assert.Equal(ActivityKind.Client, span.Kind));
+        Assert.Equal(new[] { 1, 2 }, models.Select(span => (int)span.GetTagItem("model.step")!));
         Activity[] tools = spans.Where(span => span.OperationName == "tool.execute").ToArray();
         Assert.All(tools, span => Assert.Equal(scenario == "unknown" ? "unrecognized" : "Summary", span.GetTagItem("tool.name")));
         if (errorCode is not null)
@@ -124,6 +120,60 @@ public class AgentRunnerTelemetryTests
             Assert.IsType<double>(span.GetTagItem("duration.ms"));
         });
         Assert.Contains(logger.Properties, property => property.Key == "ErrorCode" && Equals(property.Value, expectedStatus.ToString()));
+        AssertPrivatePayloadsAbsent(logger, spans);
+    }
+
+    [Theory]
+    [InlineData("batch", 2, 0)]
+    [InlineData("steps", 1, 1)]
+    [InlineData("tools", 1, 1)]
+    public async Task RunAsync_WhenBudgetStopsRun_RecordsReasonWithoutUnexecutedToolSpans(
+        string scenario, int attemptedCalls, int executedCalls)
+    {
+        Guid sessionId = Guid.NewGuid();
+        var spans = new ConcurrentQueue<Activity>();
+        using ActivityListener listener = Listen(sessionId, spans);
+        var logger = new RecordingLogger();
+        int executions = 0;
+        AIFunction function = AIFunctionFactory.Create(() =>
+        {
+            executions++;
+            return "PRIVATE_TOOL_RESULT";
+        }, "Summary");
+        List<AIContent> calls = [new FunctionCallContent("call-1", "Summary", new Dictionary<string, object?>())];
+        if (scenario == "batch")
+        {
+            calls.Add(new FunctionCallContent("call-2", "PRIVATE_TOOL_NAME",
+                new Dictionary<string, object?> { ["value"] = "PRIVATE_ARGUMENT" }));
+        }
+        var client = new FakeChatClient((_, _) => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, calls))
+        {
+            Usage = new UsageDetails { TotalTokenCount = 13 }
+        }));
+        var runner = new AgentRunner(client, new ToolDispatcher([function]), "PRIVATE_SYSTEM_PROMPT",
+            new AgentRunOptions(MaxModelSteps: scenario == "steps" ? 1 : 6, MaxToolCalls: scenario == "steps" ? 3 : 1), logger);
+
+        AgentRunResult result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.BudgetExceeded, result.Status);
+        Assert.Equal(scenario == "steps" ? AgentStopReason.ModelStepLimit : AgentStopReason.ToolCallLimit, result.StopReason);
+        Assert.Null(result.Response);
+        Assert.Single(client.ReceivedRequests);
+        Assert.Equal(executedCalls, executions);
+        Assert.Equal(attemptedCalls, result.ToolCallCount);
+        Assert.Equal(executedCalls, spans.Count(span => span.OperationName == "tool.execute"));
+        if (scenario == "batch")
+        {
+            Assert.Contains(logger.Properties, property => property.Key == "ToolCallId" && Equals(property.Value, "call-1"));
+            Assert.Contains(logger.Properties, property => property.Key == "ToolCallId" && Equals(property.Value, "call-2"));
+            Assert.Contains(logger.Properties, property => property.Key == "ToolName" && Equals(property.Value, "unrecognized"));
+        }
+        Activity root = Assert.Single(spans, span => span.OperationName == "assistant.run");
+        Assert.Equal(ActivityStatusCode.Error, root.Status);
+        Assert.Equal("BudgetExceeded", root.GetTagItem("error.code"));
+        Assert.Equal(result.StopReason.ToString(), root.GetTagItem("stop.reason"));
+        Assert.Equal(attemptedCalls, root.GetTagItem("tool.calls"));
+        Assert.Equal(13L, root.GetTagItem("gen_ai.usage.total_tokens"));
         AssertPrivatePayloadsAbsent(logger, spans);
     }
 

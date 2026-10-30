@@ -221,3 +221,25 @@ Run and record Experiment A, retain the qualified review findings, and then clos
 - `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunner`: passed, 37 tests, 0 failures.
 - `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 183 tests, 0 failures.
 - Editor diagnostics reported no errors in the runner or its tests. Verification used scripted clients and no live model requests.
+
+## Module 3 Part 3 Checkpoint
+
+### Implemented Loop
+
+- Recorded on 2026-10-30 for the working-tree implementation. Parts 1 and 2 above remain historical records of the earlier single-round behavior.
+- `AgentRunner` now repeats explicit model/tool steps. Every model request advertises the dispatcher functions; a response with no tool requests completes the run. There is no forced final request or automatic invocation middleware.
+- Complete assistant messages and matching tool results are appended in order only after the accepted batch finishes. Calls execute sequentially; later steps can consume previous results and correct argument validation errors. Blank or duplicate call IDs, including reuse across steps, fail before the affected batch executes.
+- Model-step and tool-call budgets are cumulative. No model request starts after either count limit is reached. A final answer returned by the last allowed model request can complete; a response requesting tools remains incomplete when a budget subsequently stops the run. If both count limits are exhausted together, the model-step stop takes precedence.
+- A batch larger than the remaining tool budget is rejected before any of its calls executes. All requests in that rejected batch count as attempts; previous valid batches remain executed, and the result has `BudgetExceeded`/`ToolCallLimit` with no response. Rejected requests are not appended as unmatched history.
+- Failed/unknown/invalid tool attempts consume budget just like successful calls. Exact exhaustion stops before another model request rather than spending a request on a forced final answer.
+- The linked deadline remains outside the loop and covers all model and tool steps. Caller cancellation remains distinct from duration exhaustion. Usage aggregation covers all attempted requests and preserves unknown reports/counts.
+- Model telemetry uses `model.step` spans and one-based step tags. Rejected batches retain safe identifiers, allowlisted names and budget metadata in logs without arguments, results, unknown tool names or execution spans.
+- Historical runners, their tests, console wiring and evaluation CLI routing were not changed. Conversation history is run-local; no persistence, new retries or live-model execution was added.
+
+### Part 3 Verification
+
+- `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunner`: passed, 48 tests, 0 failures.
+- `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 194 tests, 0 failures.
+- New coverage includes dependent calls across three model requests, validation correction, repeated tool selection, model-step limits, exact tool-budget exhaustion, oversized initial/later batches, cross-step ID reuse, and cancellation/duration expiry on a third model request.
+- Telemetry tests cover step numbers, aggregate usage, budget stop reasons, rejected-call metadata and payload privacy. Editor diagnostics reported no errors in the runner or its tests.
+- Verification used scripted clients and local functions. No paid model calls, console smoke test or live multistep evaluation was performed; the active console still uses `ToolChatRunner`.
