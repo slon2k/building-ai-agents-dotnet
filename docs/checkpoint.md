@@ -283,3 +283,23 @@ Run and record Experiment A, retain the qualified review findings, and then clos
 - Editor diagnostics reported no errors in the factory or its new tests. The tests use the real installed SDK and adapter with an in-memory HTTP handler, synthetic credentials and a reserved `.invalid` endpoint; no HTTP traffic leaves the handler and no paid model calls are made.
 - The initial backoff test used an unsupported millisecond retry header and failed its attempt-count assertion. Switching the test to standard `Retry-After` verified the intended SDK backoff interruption without changing runner behavior.
 - No live cloud failure experiment, interactive smoke test or live multistep answer evaluation was performed. Expanded retry telemetry remains a Part 6 consideration rather than a claimed feature here.
+
+## Module 3 Part 6 Checkpoint
+
+### Expanded Diagnostics
+
+- Recorded on 2026-10-30 for the working-tree implementation. The course exercise remains implementation-agnostic and was not edited. Historical runner sources/tests, console/evaluation routing and execution contracts remain unchanged.
+- Run spans/start logs include configured model-step, tool-call and duration budgets. Model and tool logs carry one-based step scopes; rejected-batch metadata includes the step number. Duration exhaustion now records `DurationLimit` on the interrupted model/tool span as well as the terminal run span.
+- The shared provider factory installs an observational per-try SDK pipeline policy with activity source `ExpenseAssistant.Infrastructure.AzureOpenAI`. Its `provider.attempt` spans record zero-based actual resend counts, HTTP status, timing, outcome, session/run IDs and model-step number. It does not replace the retry policy, add retries or change retry decisions.
+- Each logical SDK message owns its attempt state, preventing counts from leaking across model steps or requests. Tests verify direct success, transient recovery, exhausted retries, authentication failure, retry counts after completed tools and cancellation/duration expiry during backoff. Waiting for a retry is not counted as another send.
+- The model-step activity receives `provider.retry.count`; model completion/failure logs include the observed `RetryCount`. This requires a collected model-step activity. A fake/non-factory client or absent model activity leaves the value unknown/null rather than assuming no retries. Run-result fields continue to count logical model steps, not HTTP sends.
+- Subscribe to both `ExpenseAssistant.App.AgentRunner` and `ExpenseAssistant.Infrastructure.AzureOpenAI` for the agent/provider hierarchy. Provider attempts are correlated beneath the model request; tools remain run children with their owning step tag. No exporter, Azure Monitor destination or interactive runner selection was added.
+- Provider spans omit endpoint URLs, credentials, headers, request/response bodies and raw exception text. Runner file logs preserve session/run/step/tool metadata without payloads. Existing privacy filters and structured result behavior remain unchanged.
+
+### Part 6 Verification
+
+- `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter "FullyQualifiedName~AgentRunnerTelemetryTests|FullyQualifiedName~AzureOpenAIChatClientFactoryTests"`: passed, 32 tests, 0 failures.
+- `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 222 tests, 0 failures.
+- A JSON file-sink test records three model steps and three tool calls, verifies ordered step/call correlation and aggregate usage, and checks payload omission after flushing the logger.
+- Tool cancellation/duration tests verify child outcomes, stop reasons and correlation. SDK tests verify actual attempt spans/counts, count reset, backoff cancellation and secret/endpoint omission using the real SDK/adapter with a fake HTTP handler.
+- Editor diagnostics reported no errors in the changed source/test files. Verification was offline; no paid model calls, live exporter test, interactive smoke test or multistep behavioral evaluation was performed. Module 3's live behavioral evidence remains pending.

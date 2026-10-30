@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -81,6 +83,9 @@ public class AzureOpenAIChatClientFactoryTests
     [InlineData(true)]
     public async Task RunAsync_WhenInterruptedDuringProviderBackoff_DoesNotSendAnotherAttempt(bool timeout)
     {
+        Guid sessionId = Guid.NewGuid();
+        var spans = new ConcurrentQueue<Activity>();
+        using ActivityListener listener = Listen(sessionId, spans);
         using var cancellation = new CancellationTokenSource();
         var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var handler = new StubHandler((_, _) =>
@@ -92,7 +97,7 @@ public class AzureOpenAIChatClientFactoryTests
         using IChatClient client = CreateClient(httpClient);
         var runner = CreateRunner(client, duration: timeout ? TimeSpan.FromSeconds(1) : null);
 
-        Task<AgentRunResult> run = runner.RunAsync(Guid.NewGuid(), "Expenses?", cancellation.Token);
+        Task<AgentRunResult> run = runner.RunAsync(sessionId, "Expenses?", cancellation.Token);
         await received.Task.WaitAsync(TimeSpan.FromSeconds(5));
         if (!timeout)
         {
@@ -106,11 +111,17 @@ public class AzureOpenAIChatClientFactoryTests
         Assert.Equal(1, result.ModelStepCount);
         Assert.Null(result.Response);
         Assert.Null(result.Usage);
+        Activity model = Assert.Single(spans, span => span.OperationName == "model.step");
+        Assert.Equal(0, model.GetTagItem("provider.retry.count"));
+        Assert.Single(spans, span => span.OperationName == "provider.attempt");
     }
 
     [Fact]
     public async Task RunAsync_WhenProviderRetriesAfterTool_DoesNotReplayCompletedTool()
     {
+        Guid sessionId = Guid.NewGuid();
+        var spans = new ConcurrentQueue<Activity>();
+        using ActivityListener listener = Listen(sessionId, spans);
         int responses = 0;
         List<string> requestBodies = [];
         using var handler = new StubHandler(async (request, token) =>
@@ -133,7 +144,7 @@ public class AzureOpenAIChatClientFactoryTests
         }, "Lookup");
 
         AgentRunResult result = await CreateRunner(client, [function])
-            .RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
+            .RunAsync(sessionId, "Expenses?", CancellationToken.None);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal(3, handler.Attempts);
@@ -142,6 +153,11 @@ public class AzureOpenAIChatClientFactoryTests
         Assert.Equal(1, executions);
         Assert.Equal(10, result.Usage?.TotalTokenCount);
         Assert.Equal(requestBodies[1], requestBodies[2]);
+        Activity[] models = spans.Where(span => span.OperationName == "model.step").ToArray();
+        Assert.Equal(new[] { 0, 1 }, models.Select(span => (int)span.GetTagItem("provider.retry.count")!));
+        Activity[] attempts = spans.Where(span => span.OperationName == "provider.attempt").ToArray();
+        Assert.Equal(new[] { 1, 2, 2 }, attempts.Select(span => (int)span.GetTagItem("model.step")!));
+        Assert.Equal(new[] { 0, 0, 1 }, attempts.Select(span => (int)span.GetTagItem("retry.count")!));
     }
 
     [Fact]
@@ -177,6 +193,66 @@ public class AzureOpenAIChatClientFactoryTests
         Assert.Equal("TOOL_FAILED", envelope.RootElement.GetProperty("error").GetProperty("code").GetString());
         Assert.False(envelope.RootElement.TryGetProperty("result", out JsonElement value) && value.ValueKind != JsonValueKind.Null);
         Assert.DoesNotContain("PRIVATE_", followupBody!);
+    }
+
+    [Theory]
+    [InlineData(200, true, 1, 0)]
+    [InlineData(503, true, 2, 1)]
+    [InlineData(503, false, 4, 3)]
+    [InlineData(401, false, 1, 0)]
+    public async Task RunAsync_RecordsActualProviderAttemptsWithoutPayloads(
+        int status, bool recover, int expectedAttempts, int expectedRetries)
+    {
+        Guid sessionId = Guid.NewGuid();
+        var spans = new ConcurrentQueue<Activity>();
+        using ActivityListener listener = Listen(sessionId, spans);
+        int responses = 0;
+        using var handler = new StubHandler((_, _) => Task.FromResult(Reply(recover && ++responses > 1 ? 200 : status)));
+        using var httpClient = new HttpClient(handler);
+        using IChatClient client = CreateClient(httpClient);
+
+        AgentRunResult result = await CreateRunner(client).RunAsync(sessionId, "PRIVATE_USER_TEXT", CancellationToken.None);
+
+        Assert.Equal(recover ? AgentRunStatus.Completed : AgentRunStatus.Failed, result.Status);
+        Assert.Equal(expectedAttempts, handler.Attempts);
+        Activity model = Assert.Single(spans, span => span.OperationName == "model.step");
+        Assert.Equal(expectedRetries, model.GetTagItem("provider.retry.count"));
+        Activity[] attempts = spans.Where(span => span.OperationName == "provider.attempt").ToArray();
+        Assert.Equal(expectedAttempts, attempts.Length);
+        Assert.Equal(Enumerable.Range(0, expectedAttempts), attempts.Select(span => (int)span.GetTagItem("retry.count")!));
+        Assert.All(attempts, span =>
+        {
+            Assert.Equal(model.SpanId, span.ParentSpanId);
+            Assert.Equal(model.TraceId, span.TraceId);
+            Assert.Equal(result.RunId.ToString(), span.GetTagItem("run.id"));
+            Assert.Equal(1, span.GetTagItem("model.step"));
+            Assert.IsType<double>(span.GetTagItem("duration.ms"));
+            int httpStatus = (int)span.GetTagItem("http.response.status_code")!;
+            Assert.Equal(httpStatus >= 400 ? ActivityStatusCode.Error : ActivityStatusCode.Ok, span.Status);
+        });
+        string telemetry = string.Join('\n', spans.SelectMany(span => span.TagObjects).Select(tag => $"{tag.Key}={tag.Value}"));
+        Assert.DoesNotContain("PRIVATE_", telemetry);
+        Assert.DoesNotContain("expense-assistant.invalid", telemetry);
+        Assert.DoesNotContain("test-only-key", telemetry);
+    }
+
+    private static ActivityListener Listen(Guid sessionId, ConcurrentQueue<Activity> spans)
+    {
+        var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == AgentRunner.ActivitySourceName
+                || source.Name == AzureOpenAIChatClientFactory.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> options) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (Equals(activity.GetTagItem("session.id"), sessionId.ToString()))
+                {
+                    spans.Enqueue(activity);
+                }
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        return listener;
     }
 
     private static string UnavailableTool() => throw new InvalidOperationException("PRIVATE_TOOL_EXCEPTION");

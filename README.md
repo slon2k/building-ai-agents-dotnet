@@ -129,9 +129,13 @@ Part 4 preserves each original assistant message and inserts its matching tool r
 
 Part 5 keeps tool errors recoverable within the remaining budgets: unknown tools, invalid arguments and unavailable functions return safe structured failures, not successful empty data. Unexpected function failures use `TOOL_FAILED`; query failures retain `QUERY_FAILED`. Provider request failures terminate the run with a generic safe error after the SDK's retry policy is exhausted. Configuration validation remains at startup; authentication/authorization failures are not retried.
 
-`AzureOpenAIChatClientFactory.MaxProviderRetries` explicitly sets the provider SDK to at most three additional HTTP attempts (four sends total per logical model request), preserving its documented default bound. HTTP 408, 429, 500, 502, 503 and 504 are retryable with SDK-managed backoff; 400, 401, 403, 404 and 422 are not retried. There is no runner/application retry wrapper, so retries do not restart completed tools or multiply through another retry layer. The same run cancellation token and deadline cover SDK retry backoff and tool execution. `ModelStepCount` counts logical model calls, not HTTP attempts. Actual retry counts are not currently exposed in run results/spans, and usage reports cannot establish the complete billed cost of failed HTTP attempts. The original factory API is retained; a transport-injection overload supports offline HTTP tests without network activity.
+`AzureOpenAIChatClientFactory.MaxProviderRetries` explicitly sets the provider SDK to at most three additional HTTP attempts (four sends total per logical model request), preserving its documented default bound. HTTP 408, 429, 500, 502, 503 and 504 are retryable with SDK-managed backoff; 400, 401, 403, 404 and 422 are not retried. There is no runner/application retry wrapper, so retries do not restart completed tools or multiply through another retry layer. The same run cancellation token and deadline cover SDK retry backoff and tool execution. `ModelStepCount` counts logical model calls, not HTTP attempts. Retry counts are diagnostic metadata rather than result fields, and usage reports cannot establish the complete billed cost of failed HTTP attempts. The original factory API is retained; a transport-injection overload supports offline HTTP tests without network activity.
 
 The new runner exposes correlated spans through `ExpenseAssistant.App.AgentRunner` and uses `ILogger<AgentRunner>` without logging prompts, response text, or tool payloads. Model requests use `model.step` spans with a one-based `model.step` tag; tool spans carry the corresponding step number. Run diagnostics include counters and stop reasons. Rejected batches log safe call IDs, allowlisted tool names and budget metadata without execution spans. The runner accepts a dispatcher constructed from `new ExpenseTools(queries).CreateFunctions()`. It is currently invoked through offline tests, not the interactive app; no live multistep evaluation has been recorded.
+
+Part 6 adds configured budgets to the run span and start log, step scopes to model/tool file events, and duration stop reasons to interrupted child spans. The shared provider factory adds a separate `ExpenseAssistant.Infrastructure.AzureOpenAI` activity source with `provider.attempt` spans inside each logical model request. Attempt spans record HTTP status, duration, outcome, correlation IDs, model-step number and a zero-based `retry.count`: zero is the first send, one is the first resend. Counters reset for each logical request; cancellation during backoff before another send does not increment them. The pipeline policy observes attempts without changing retry decisions or adding retries.
+
+Subscribe an `ActivityListener` or OpenTelemetry collector to both sources for the complete agent/provider trace. The last observed resend count is also tagged as `provider.retry.count` on the model-step span and included as `RetryCount` in its completion/failure file event. A collected model-step span is needed to carry that metadata; without one, or with a client that does not use this factory, retry count stays unknown/null rather than being reported as zero. File logging still records step/run/tool correlation without an activity listener. Attempt spans do not contain endpoint URLs, credentials, headers, request/response bodies or raw exception details. Historical runner sources and console/evaluation selection remain unchanged; no tracing exporter is configured automatically.
 
 ```shell
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunner
@@ -141,6 +145,12 @@ Run the SDK transport/failure checks without credentials or network requests:
 
 ```shell
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AzureOpenAIChatClientFactoryTests
+```
+
+Run the multistep file/span trace checks:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunnerTelemetryTests
 ```
 
 ### Logging and tracing

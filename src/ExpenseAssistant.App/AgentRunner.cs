@@ -48,12 +48,16 @@ public sealed class AgentRunner
 		long startTimestamp = Stopwatch.GetTimestamp();
 		using IDisposable? logScope = logger.BeginScope("SessionId:{SessionId} RunId:{RunId}", sessionId, runId);
 		using Activity? runActivity = StartSpan("assistant.run");
+		runActivity?.SetTag("budget.max_model_steps", maxModelSteps);
+		runActivity?.SetTag("budget.max_tool_calls", maxToolCalls);
+		runActivity?.SetTag("budget.max_duration_ms", requestTimeout.TotalMilliseconds);
 		List<UsageDetails?> modelUsages = [];
 		HashSet<string> callIds = new(StringComparer.Ordinal);
 		int toolCallCount = 0;
 		using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 		timeoutCts.CancelAfter(requestTimeout);
-		logger.LogInformation("Run started");
+		logger.LogInformation("Run started MaxModelSteps={MaxModelSteps} MaxToolCalls={MaxToolCalls} MaxDurationMs={MaxDurationMs}",
+			maxModelSteps, maxToolCalls, requestTimeout.TotalMilliseconds);
 
 		try
 		{
@@ -101,13 +105,13 @@ public sealed class AgentRunner
 				if (calls.Length > remainingToolCalls)
 				{
 					toolCallCount += calls.Length;
-					logger.LogWarning("Tool batch rejected RequestedToolCalls={RequestedToolCalls} RemainingToolCalls={RemainingToolCalls}",
-						calls.Length, remainingToolCalls);
+					logger.LogWarning("Tool batch rejected Step={Step} RequestedToolCalls={RequestedToolCalls} RemainingToolCalls={RemainingToolCalls}",
+						modelUsages.Count, calls.Length, remainingToolCalls);
 					foreach (FunctionCallContent call in calls)
 					{
 						string toolName = dispatcher.Functions.Any(function => function.Name == call.Name) ? call.Name : "unrecognized";
-						logger.LogWarning("Tool request rejected ToolCallId={ToolCallId} ToolName={ToolName} ErrorCode={ErrorCode}",
-							call.CallId, toolName, "TOOL_CALL_LIMIT");
+						logger.LogWarning("Tool request rejected Step={Step} ToolCallId={ToolCallId} ToolName={ToolName} ErrorCode={ErrorCode}",
+							modelUsages.Count, call.CallId, toolName, "TOOL_CALL_LIMIT");
 					}
 					return Result(AgentRunStatus.BudgetExceeded,
 						error: "The requested tool batch exceeded the remaining tool-call budget. No calls in the batch were executed.",
@@ -181,6 +185,7 @@ public sealed class AgentRunner
 			List<ChatMessage> messages, ChatOptions options, CancellationToken token)
 		{
 			int step = modelUsages.Count + 1;
+			using IDisposable? stepScope = logger.BeginScope("Step:{Step}", step);
 			using Activity? activity = StartSpan("model.step", ActivityKind.Client);
 			activity?.SetTag("model.step", step);
 			long started = Stopwatch.GetTimestamp();
@@ -195,8 +200,8 @@ public sealed class AgentRunner
 				SetUsageTags(activity, response.Usage);
 				activity?.SetTag("gen_ai.response.model", response.ModelId);
 				logger.LogInformation(
-					"Model request finished Step={Step} Outcome={Outcome} DurationMs={DurationMs} InputTokens={InputTokens} OutputTokens={OutputTokens} TotalTokens={TotalTokens}",
-					step, "Completed", Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+					"Model request finished Step={Step} Outcome={Outcome} RetryCount={RetryCount} DurationMs={DurationMs} InputTokens={InputTokens} OutputTokens={OutputTokens} TotalTokens={TotalTokens}",
+					step, "Completed", activity?.GetTagItem("provider.retry.count"), Stopwatch.GetElapsedTime(started).TotalMilliseconds,
 					response.Usage?.InputTokenCount, response.Usage?.OutputTokenCount, response.Usage?.TotalTokenCount);
 				return response;
 			}
@@ -204,8 +209,9 @@ public sealed class AgentRunner
 			{
 				string code = CancellationCode(exception);
 				FinishSpan(activity, code, code);
-				logger.LogWarning("Model request failed Step={Step} ErrorCode={ErrorCode} DurationMs={DurationMs}",
-					step, code, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+				activity?.SetTag("stop.reason", code == "BudgetExceeded" ? nameof(AgentStopReason.DurationLimit) : null);
+				logger.LogWarning("Model request failed Step={Step} ErrorCode={ErrorCode} RetryCount={RetryCount} DurationMs={DurationMs}",
+					step, code, activity?.GetTagItem("provider.retry.count"), Stopwatch.GetElapsedTime(started).TotalMilliseconds);
 				throw;
 			}
 			finally
@@ -218,7 +224,8 @@ public sealed class AgentRunner
 		{
 			toolCallCount++;
 			string toolName = dispatcher.Functions.Any(function => function.Name == call.Name) ? call.Name : "unrecognized";
-			using IDisposable? toolScope = logger.BeginScope("ToolCallId:{ToolCallId} ToolName:{ToolName}", call.CallId, toolName);
+			using IDisposable? toolScope = logger.BeginScope("Step:{Step} ToolCallId:{ToolCallId} ToolName:{ToolName}",
+				modelUsages.Count, call.CallId, toolName);
 			using Activity? activity = StartSpan("tool.execute");
 			activity?.SetTag("tool.call.id", call.CallId);
 			activity?.SetTag("tool.name", toolName);
@@ -242,6 +249,7 @@ public sealed class AgentRunner
 			{
 				string code = CancellationCode(exception);
 				FinishSpan(activity, code, code);
+				activity?.SetTag("stop.reason", code == "BudgetExceeded" ? nameof(AgentStopReason.DurationLimit) : null);
 				logger.LogWarning("Tool interrupted ErrorCode={ErrorCode} DurationMs={DurationMs}",
 					code, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
 				throw;

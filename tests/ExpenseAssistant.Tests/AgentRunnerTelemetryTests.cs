@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text.Json;
 using ExpenseAssistant.App;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Formatting.Json;
 
 namespace ExpenseAssistant.Tests;
 
@@ -45,6 +48,9 @@ public class AgentRunnerTelemetryTests
         Activity root = Assert.Single(spans, span => span.OperationName == "assistant.run");
         Assert.Equal(ActivityStatusCode.Ok, root.Status);
         Assert.Equal("Completed", root.GetTagItem("outcome"));
+        Assert.Equal(6, root.GetTagItem("budget.max_model_steps"));
+        Assert.Equal(3, root.GetTagItem("budget.max_tool_calls"));
+        Assert.Equal(30_000d, root.GetTagItem("budget.max_duration_ms"));
         Assert.Equal(2, root.GetTagItem("model.steps"));
         Assert.Equal(1, root.GetTagItem("tool.calls"));
         Assert.Equal(38L, root.GetTagItem("gen_ai.usage.total_tokens"));
@@ -77,7 +83,10 @@ public class AgentRunnerTelemetryTests
         }
         Assert.Contains(logger.Scopes, scope => scope.Contains(sessionId.ToString()) && scope.Contains(result.RunId.ToString()));
         Assert.Contains(logger.Scopes, scope => scope.Contains("call-1"));
+        Assert.Contains(logger.Scopes, scope => scope.Contains("Step:1") && scope.Contains("call-1"));
+        Assert.Contains(logger.Scopes, scope => scope == "Step:2");
         Assert.Contains(logger.Properties, property => property.Key == "TotalTokens" && Equals(property.Value, 38L));
+        Assert.All(logger.Properties.Where(property => property.Key == "RetryCount"), property => Assert.Null(property.Value));
         AssertPrivatePayloadsAbsent(logger, spans);
     }
 
@@ -174,6 +183,120 @@ public class AgentRunnerTelemetryTests
         Assert.Equal(result.StopReason.ToString(), root.GetTagItem("stop.reason"));
         Assert.Equal(attemptedCalls, root.GetTagItem("tool.calls"));
         Assert.Equal(13L, root.GetTagItem("gen_ai.usage.total_tokens"));
+        AssertPrivatePayloadsAbsent(logger, spans);
+    }
+
+    [Fact]
+    public async Task RunAsync_WithFileLogging_RecordsCompleteMultistepTraceWithoutPayloads()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "ExpenseAssistant.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "events.jsonl");
+        Guid sessionId = Guid.NewGuid();
+        var spans = new ConcurrentQueue<Activity>();
+        using ActivityListener listener = Listen(sessionId, spans);
+        try
+        {
+            AgentRunResult result;
+            using (var fileLogger = new LoggerConfiguration().Enrich.FromLogContext()
+                .WriteTo.File(new JsonFormatter(), path).CreateLogger())
+            using (ILoggerFactory factory = LoggerFactory.Create(builder => builder.ClearProviders().AddSerilog(fileLogger)))
+            {
+                AIFunction function = AIFunctionFactory.Create((string value) => "PRIVATE_TOOL_RESULT", "Lookup");
+                FunctionCallContent CreateCall(string id) => new(id, "Lookup",
+                    new Dictionary<string, object?> { ["value"] = "PRIVATE_ARGUMENT" });
+                ChatResponse[] responses =
+                [
+                    new(new ChatMessage(ChatRole.Assistant, [CreateCall("one"), CreateCall("two")])),
+                    new(new ChatMessage(ChatRole.Assistant, [CreateCall("three")])),
+                    new(new ChatMessage(ChatRole.Assistant, "PRIVATE_FINAL_TEXT"))
+                ];
+                foreach (ChatResponse response in responses)
+                {
+                    response.Usage = new UsageDetails { InputTokenCount = 10, OutputTokenCount = 2, TotalTokenCount = 12 };
+                }
+                var queue = new Queue<ChatResponse>(responses);
+                var client = new FakeChatClient((_, _) => Task.FromResult(queue.Dequeue()));
+                var runner = new AgentRunner(client, new ToolDispatcher([function]), "PRIVATE_SYSTEM_PROMPT",
+                    new AgentRunOptions(), factory.CreateLogger<AgentRunner>());
+
+                result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", CancellationToken.None);
+            }
+
+            Assert.Equal(AgentRunStatus.Completed, result.Status);
+            Assert.Equal(new[] { "model.step", "tool.execute", "tool.execute", "model.step", "tool.execute", "model.step", "assistant.run" },
+                spans.Select(span => span.OperationName));
+            Activity root = Assert.Single(spans, span => span.OperationName == "assistant.run");
+            Assert.Equal(36L, root.GetTagItem("gen_ai.usage.total_tokens"));
+            Assert.Equal(new[] { 1, 1, 1, 2, 2, 3 }, spans.Where(span => span != root)
+                .Select(span => (int)span.GetTagItem("model.step")!));
+            Assert.All(spans.Where(span => span != root), span => Assert.Equal(root.SpanId, span.ParentSpanId));
+
+            string[] lines = await File.ReadAllLinesAsync(path);
+            JsonElement[] events = lines.Select(line => JsonSerializer.Deserialize<JsonElement>(line)).ToArray();
+            Assert.All(events, entry =>
+            {
+                JsonElement properties = entry.GetProperty("Properties");
+                Assert.Equal(sessionId.ToString(), properties.GetProperty("SessionId").GetString());
+                Assert.Equal(result.RunId.ToString(), properties.GetProperty("RunId").GetString());
+            });
+            JsonElement[] models = events.Where(entry => entry.GetProperty("MessageTemplate").GetString()!
+                .StartsWith("Model request finished", StringComparison.Ordinal)).ToArray();
+            Assert.Equal(new[] { 1, 2, 3 }, models.Select(entry => entry.GetProperty("Properties").GetProperty("Step").GetInt32()));
+            Assert.All(models, entry => Assert.Equal(JsonValueKind.Null, entry.GetProperty("Properties").GetProperty("RetryCount").ValueKind));
+            JsonElement[] tools = events.Where(entry => entry.GetProperty("MessageTemplate").GetString()!
+                .StartsWith("Tool finished", StringComparison.Ordinal)).ToArray();
+            Assert.Equal(new[] { 1, 1, 2 }, tools.Select(entry => entry.GetProperty("Properties").GetProperty("Step").GetInt32()));
+            Assert.Equal(new[] { "one", "two", "three" }, tools.Select(entry => entry.GetProperty("Properties").GetProperty("ToolCallId").GetString()));
+            Assert.All(tools, entry => Assert.Equal("Lookup", entry.GetProperty("Properties").GetProperty("ToolName").GetString()));
+            Assert.DoesNotContain("PRIVATE_", string.Join('\n', lines));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_WhenToolIsInterrupted_RecordsCorrelatedOutcomeAndStopReason(bool timeout)
+    {
+        Guid sessionId = Guid.NewGuid();
+        var spans = new ConcurrentQueue<Activity>();
+        using ActivityListener listener = Listen(sessionId, spans);
+        var logger = new RecordingLogger();
+        using var cancellation = new CancellationTokenSource();
+        AIFunction function = AIFunctionFactory.Create(async (CancellationToken token) =>
+        {
+            if (!timeout)
+            {
+                cancellation.Cancel();
+            }
+            await Task.Delay(Timeout.Infinite, token);
+            return "PRIVATE_TOOL_RESULT";
+        }, "Lookup");
+        var client = new FakeChatClient((_, _) => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            [new FunctionCallContent("interrupted", "Lookup", new Dictionary<string, object?>())]))));
+        var runner = new AgentRunner(client, new ToolDispatcher([function]), "PRIVATE_SYSTEM_PROMPT",
+            new AgentRunOptions(MaxDuration: timeout ? TimeSpan.FromMilliseconds(100) : null), logger);
+
+        AgentRunResult result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", cancellation.Token);
+
+        Assert.Equal(timeout ? AgentRunStatus.BudgetExceeded : AgentRunStatus.Cancelled, result.Status);
+        Assert.Single(client.ReceivedRequests);
+        Assert.Equal(3, spans.Count);
+        Activity root = Assert.Single(spans, span => span.OperationName == "assistant.run");
+        Activity tool = Assert.Single(spans, span => span.OperationName == "tool.execute");
+        Assert.Equal(root.SpanId, tool.ParentSpanId);
+        Assert.Equal(root.TraceId, tool.TraceId);
+        Assert.Equal(result.RunId.ToString(), tool.GetTagItem("run.id"));
+        Assert.Equal(1, tool.GetTagItem("model.step"));
+        Assert.Equal("interrupted", tool.GetTagItem("tool.call.id"));
+        Assert.Equal(ActivityStatusCode.Error, tool.Status);
+        Assert.Equal(result.Status.ToString(), tool.GetTagItem("outcome"));
+        Assert.Equal(timeout ? "DurationLimit" : null, tool.GetTagItem("stop.reason"));
+        Assert.Contains(logger.Scopes, scope => scope.Contains("Step:1") && scope.Contains("interrupted"));
         AssertPrivatePayloadsAbsent(logger, spans);
     }
 
