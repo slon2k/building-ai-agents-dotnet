@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ExpenseAssistant.App;
-using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -42,16 +41,18 @@ public class AgentRunnerTelemetryTests
             }
         ]);
         var client = new FakeChatClient((_, _) => Task.FromResult(responses.Dequeue()));
-        var runner = new AgentRunner(client, new ToolDispatcher([function]), TimeSpan.FromSeconds(30),
-            "PRIVATE_SYSTEM_PROMPT", maxToolCalls: 1, logger: logger);
+        var runner = new AgentRunner(client, new ToolDispatcher([function]),
+            "PRIVATE_SYSTEM_PROMPT", new AgentRunOptions(MaxToolCalls: 1), logger);
 
-        ChatRunResult result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", CancellationToken.None);
+        AgentRunResult result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Completed, result.Status);
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal(scenario == "limit" ? 5 : 4, spans.Count);
         Activity root = Assert.Single(spans, span => span.OperationName == "assistant.run");
         Assert.Equal(ActivityStatusCode.Ok, root.Status);
         Assert.Equal("Completed", root.GetTagItem("outcome"));
+        Assert.Equal(2, root.GetTagItem("model.steps"));
+        Assert.Equal(scenario == "limit" ? 2 : 1, root.GetTagItem("tool.calls"));
         Assert.Equal(38L, root.GetTagItem("gen_ai.usage.total_tokens"));
         Assert.All(spans, span =>
         {
@@ -85,10 +86,10 @@ public class AgentRunnerTelemetryTests
     }
 
     [Theory]
-    [InlineData("provider", ChatRunStatus.Failed)]
-    [InlineData("cancel", ChatRunStatus.Cancelled)]
-    [InlineData("timeout", ChatRunStatus.TimedOut)]
-    public async Task RunAsync_RecordsInterruptedModelWithoutExceptionDetails(string scenario, ChatRunStatus expectedStatus)
+    [InlineData("provider", AgentRunStatus.Failed)]
+    [InlineData("cancel", AgentRunStatus.Cancelled)]
+    [InlineData("timeout", AgentRunStatus.BudgetExceeded)]
+    public async Task RunAsync_RecordsInterruptedModelWithoutExceptionDetails(string scenario, AgentRunStatus expectedStatus)
     {
         Guid sessionId = Guid.NewGuid();
         var spans = new ConcurrentQueue<Activity>();
@@ -107,13 +108,14 @@ public class AgentRunnerTelemetryTests
             }
             throw new InvalidOperationException("PRIVATE_PROVIDER_EXCEPTION");
         });
-        var runner = new AgentRunner(client, new ToolDispatcher([]),
-            scenario == "timeout" ? TimeSpan.FromMilliseconds(100) : TimeSpan.FromSeconds(30),
-            "PRIVATE_SYSTEM_PROMPT", logger: logger);
+        var runner = new AgentRunner(client, new ToolDispatcher([]), "PRIVATE_SYSTEM_PROMPT",
+            new AgentRunOptions(MaxDuration: scenario == "timeout" ? TimeSpan.FromMilliseconds(100) : null), logger);
 
-        ChatRunResult result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", cancellation.Token);
+        AgentRunResult result = await runner.RunAsync(sessionId, "PRIVATE_USER_TEXT", cancellation.Token);
 
         Assert.Equal(expectedStatus, result.Status);
+        Activity root = Assert.Single(spans, span => span.OperationName == "assistant.run");
+        Assert.Equal(scenario == "timeout" ? "DurationLimit" : null, root.GetTagItem("stop.reason"));
         Assert.Equal(2, spans.Count);
         Assert.All(spans, span =>
         {

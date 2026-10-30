@@ -1,6 +1,5 @@
 using System.Text.Json;
 using ExpenseAssistant.App;
-using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
 
 namespace ExpenseAssistant.Tests;
@@ -17,10 +16,15 @@ public class AgentRunnerTests
         var runner = CreateRunner(client);
         Guid sessionId = Guid.NewGuid();
 
-        ChatRunResult first = await runner.RunAsync(sessionId, "Expenses?", CancellationToken.None);
-        ChatRunResult second = await runner.RunAsync(sessionId, "Expenses?", CancellationToken.None);
+        AgentRunResult first = await runner.RunAsync(sessionId, "Expenses?", CancellationToken.None);
+        AgentRunResult second = await runner.RunAsync(sessionId, "Expenses?", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Completed, first.Status);
+        Assert.Equal(AgentRunStatus.Completed, first.Status);
+        Assert.Equal(1, first.ModelStepCount);
+        Assert.Equal(0, first.ToolCallCount);
+        Assert.Null(first.StopReason);
+        Assert.Equal(1, second.ModelStepCount);
+        Assert.Equal(0, second.ToolCallCount);
         Assert.Same(response, first.Response);
         Assert.Equal(sessionId, first.SessionId);
         Assert.Equal(sessionId, second.SessionId);
@@ -45,10 +49,12 @@ public class AgentRunnerTests
             Call("second", "Record", "{\"value\":2}")]);
         var client = Client(new ChatResponse(initialMessage), Reply("Done."));
 
-        ChatRunResult result = await CreateRunner(client, [function])
+        AgentRunResult result = await CreateRunner(client, [function])
             .RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Completed, result.Status);
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(2, result.ModelStepCount);
+        Assert.Equal(2, result.ToolCallCount);
         Assert.Equal(new[] { 1, 2 }, executions);
         Assert.Equal(2, client.ReceivedRequests.Count);
         Assert.Same(function, Assert.Single(client.ReceivedOptions[0]!.Tools!));
@@ -75,9 +81,10 @@ public class AgentRunnerTests
         var client = Client(new ChatResponse(new ChatMessage(ChatRole.Assistant, [Call("rejected", name, json)])), Reply("Unavailable."));
         AIFunction function = AIFunctionFactory.Create((string value) => ToolResult<string>.Success(value), "Echo");
 
-        ChatRunResult result = await CreateRunner(client, [function]).RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
+        AgentRunResult result = await CreateRunner(client, [function]).RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Completed, result.Status);
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(1, result.ToolCallCount);
         FunctionResultContent toolResult = Assert.Single(ToolResults(client));
         Assert.Equal("rejected", toolResult.CallId);
         Assert.Equal(code, Envelope(toolResult).GetProperty("error").GetProperty("code").GetString());
@@ -91,10 +98,11 @@ public class AgentRunnerTests
         var client = Client(new ChatResponse(new ChatMessage(ChatRole.Assistant, [
             Call("first", "Count"), Call("second", "Count"), Call("third", "Count") ])), Reply("Done."));
 
-        ChatRunResult result = await CreateRunner(client, [function], maxToolCalls: 1)
+        AgentRunResult result = await CreateRunner(client, [function], maxToolCalls: 1)
             .RunAsync(Guid.NewGuid(), "Count", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Completed, result.Status);
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(3, result.ToolCallCount);
         Assert.Equal(1, executions);
         FunctionResultContent[] results = ToolResults(client);
         Assert.Equal(new[] { "first", "second", "third" }, results.Select(item => item.CallId));
@@ -111,9 +119,11 @@ public class AgentRunnerTests
         var client = Client(new ChatResponse(new ChatMessage(ChatRole.Assistant, [
             Call(firstId, "Count"), Call(secondId, "Count") ])));
 
-        ChatRunResult result = await CreateRunner(client, [function]).RunAsync(Guid.NewGuid(), "Count", CancellationToken.None);
+        AgentRunResult result = await CreateRunner(client, [function]).RunAsync(Guid.NewGuid(), "Count", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Failed, result.Status);
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal(1, result.ModelStepCount);
+        Assert.Equal(0, result.ToolCallCount);
         Assert.Null(result.Response);
         Assert.Equal(0, executions);
         Assert.Single(client.ReceivedRequests);
@@ -128,9 +138,9 @@ public class AgentRunnerTests
             new ChatResponse(new ChatMessage(ChatRole.Assistant, [Call("first", "Count")])),
             new ChatResponse(new ChatMessage(ChatRole.Assistant, [Call("extra", "Count")])));
 
-        ChatRunResult result = await CreateRunner(client, [function]).RunAsync(Guid.NewGuid(), "Count", CancellationToken.None);
+        AgentRunResult result = await CreateRunner(client, [function]).RunAsync(Guid.NewGuid(), "Count", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Failed, result.Status);
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
         Assert.Null(result.Response);
         Assert.Equal(1, executions);
         Assert.Equal(2, client.ReceivedRequests.Count);
@@ -159,9 +169,12 @@ public class AgentRunnerTests
         });
         var runner = CreateRunner(client, timeout: timeout ? TimeSpan.FromMilliseconds(100) : null);
 
-        ChatRunResult result = await runner.RunAsync(Guid.NewGuid(), "Expenses?", cancellation.Token);
+        AgentRunResult result = await runner.RunAsync(Guid.NewGuid(), "Expenses?", cancellation.Token);
 
-        Assert.Equal(timeout ? ChatRunStatus.TimedOut : ChatRunStatus.Cancelled, result.Status);
+        Assert.Equal(timeout ? AgentRunStatus.BudgetExceeded : AgentRunStatus.Cancelled, result.Status);
+        Assert.Equal(timeout ? AgentStopReason.DurationLimit : (AgentStopReason?)null, result.StopReason);
+        Assert.Equal(requestIndex + 1, result.ModelStepCount);
+        Assert.Equal(requestIndex, result.ToolCallCount);
         Assert.Null(result.Response);
         Assert.Null(result.Usage);
     }
@@ -173,9 +186,11 @@ public class AgentRunnerTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
-        ChatRunResult result = await CreateRunner(client).RunAsync(Guid.NewGuid(), "Expenses?", cancellation.Token);
+        AgentRunResult result = await CreateRunner(client).RunAsync(Guid.NewGuid(), "Expenses?", cancellation.Token);
 
-        Assert.Equal(ChatRunStatus.Cancelled, result.Status);
+        Assert.Equal(AgentRunStatus.Cancelled, result.Status);
+        Assert.Equal(0, result.ModelStepCount);
+        Assert.Equal(0, result.ToolCallCount);
         Assert.Empty(client.ReceivedRequests);
     }
 
@@ -196,10 +211,13 @@ public class AgentRunnerTests
         }, "Cancel");
         var client = Client(new ChatResponse(new ChatMessage(ChatRole.Assistant, [Call("first", "Cancel")])));
 
-        ChatRunResult result = await CreateRunner(client, [function], timeout: timeout ? TimeSpan.FromMilliseconds(100) : null)
+        AgentRunResult result = await CreateRunner(client, [function], timeout: timeout ? TimeSpan.FromMilliseconds(100) : null)
             .RunAsync(Guid.NewGuid(), "Expenses?", cancellation.Token);
 
-        Assert.Equal(timeout ? ChatRunStatus.TimedOut : ChatRunStatus.Cancelled, result.Status);
+        Assert.Equal(timeout ? AgentRunStatus.BudgetExceeded : AgentRunStatus.Cancelled, result.Status);
+        Assert.Equal(timeout ? AgentStopReason.DurationLimit : (AgentStopReason?)null, result.StopReason);
+        Assert.Equal(1, result.ModelStepCount);
+        Assert.Equal(1, result.ToolCallCount);
         Assert.Single(client.ReceivedRequests);
     }
 
@@ -208,9 +226,10 @@ public class AgentRunnerTests
     {
         var client = new FakeChatClient((_, _) => throw new InvalidOperationException("PRIVATE provider details"));
 
-        ChatRunResult result = await CreateRunner(client).RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
+        AgentRunResult result = await CreateRunner(client).RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Failed, result.Status);
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.Equal(1, result.ModelStepCount);
         Assert.Equal("The assistant request could not be completed.", result.Error);
     }
 
@@ -228,9 +247,9 @@ public class AgentRunnerTests
         final.Usage = new UsageDetails { InputTokenCount = 20, OutputTokenCount = 5, TotalTokenCount = 25 };
         var client = Client(initial, final);
 
-        ChatRunResult result = await CreateRunner(client).RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
+        AgentRunResult result = await CreateRunner(client).RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
 
-        Assert.Equal(ChatRunStatus.Completed, result.Status);
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Same(final.Usage, result.Response?.Usage);
         Assert.Equal(25, final.Usage.TotalTokenCount);
         if (missingUsage)
@@ -254,9 +273,78 @@ public class AgentRunnerTests
         Assert.Throws<ArgumentOutOfRangeException>(() => CreateRunner(Client(), timeout: TimeSpan.FromMilliseconds(milliseconds)));
     }
 
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(-1, 1)]
+    [InlineData(1, 0)]
+    [InlineData(1, -1)]
+    public void Constructor_RejectsNonPositiveCountLimits(int maxModelSteps, int maxToolCalls)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AgentRunner(Client(), new ToolDispatcher([]),
+            "Use tools.", new AgentRunOptions(MaxModelSteps: maxModelSteps, MaxToolCalls: maxToolCalls)));
+    }
+
+    [Fact]
+    public async Task RunAsync_WithDefaultOptions_CompletesWithoutExplicitDuration()
+    {
+        var client = Client(Reply("Which date range?"));
+        var runner = new AgentRunner(client, new ToolDispatcher([]), "Use tools.", new AgentRunOptions());
+
+        AgentRunResult result = await runner.RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(1, result.ModelStepCount);
+        Assert.Equal(0, result.ToolCallCount);
+        Assert.Null(result.Error);
+        Assert.Null(result.StopReason);
+    }
+
+    [Fact]
+    public async Task RunAsync_WithOneModelStepAndTools_StopsWithoutReturningIntermediateAnswer()
+    {
+        var initial = new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            [new TextContent("PRIVATE_INTERMEDIATE_TEXT"), Call("first", "Missing")]))
+        {
+            Usage = new UsageDetails { TotalTokenCount = 13 }
+        };
+        var client = Client(initial);
+        var runner = new AgentRunner(client, new ToolDispatcher([]), "Use tools.",
+            new AgentRunOptions(MaxModelSteps: 1));
+
+        AgentRunResult result = await runner.RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.BudgetExceeded, result.Status);
+        Assert.Equal(AgentStopReason.ModelStepLimit, result.StopReason);
+        Assert.Null(result.Response);
+        Assert.Equal(1, result.ModelStepCount);
+        Assert.Equal(1, result.ToolCallCount);
+        Assert.Equal(13, result.Usage?.TotalTokenCount);
+        Assert.NotNull(result.Error);
+        Assert.DoesNotContain("PRIVATE_", result.Error);
+        Assert.Single(client.ReceivedRequests);
+    }
+
+    [Fact]
+    public async Task RunAsync_WithOneModelStepAndDirectAnswer_CompletesAtTheLimit()
+    {
+        var client = Client(Reply("Which date range?"));
+        var runner = new AgentRunner(client, new ToolDispatcher([]), "Use tools.",
+            new AgentRunOptions(MaxModelSteps: 1));
+
+        AgentRunResult result = await runner.RunAsync(Guid.NewGuid(), "Expenses?", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal("Which date range?", result.Response?.Text);
+        Assert.Null(result.StopReason);
+        Assert.Equal(1, result.ModelStepCount);
+        Assert.Equal(0, result.ToolCallCount);
+        Assert.Single(client.ReceivedRequests);
+    }
+
     private static AgentRunner CreateRunner(FakeChatClient client, IReadOnlyList<AIFunction>? functions = null,
         int maxToolCalls = 4, TimeSpan? timeout = null) =>
-        new(client, new ToolDispatcher(functions ?? []), timeout ?? TimeSpan.FromSeconds(30), "Use tools.", maxToolCalls);
+        new(client, new ToolDispatcher(functions ?? []), "Use tools.",
+            new AgentRunOptions(MaxToolCalls: maxToolCalls, MaxDuration: timeout));
 
     private static ChatResponse Reply(string text) => new(new ChatMessage(ChatRole.Assistant, text));
 

@@ -205,3 +205,19 @@ Run and record Experiment A, retain the qualified review findings, and then clos
 - `AgentRunner` is test-invokable but is not yet selected by the interactive app or evaluation CLI.
 - New run options/results, model-step counters and `BudgetExceeded` belong to Part 2. Repeated model/tool cycles and whole-batch remaining-budget enforcement belong to Part 3.
 - This checkpoint does not close the earlier Module 2 live-experiment limitations or claim a functioning multi-step agent.
+
+## Module 3 Part 2 Contract Update
+
+- Recorded on 2026-10-30 for the working-tree implementation. The Part 1 checkpoint above records the earlier contract and remains historical.
+- Updated `AgentRunner` tests and telemetry tests to the separate `AgentRunOptions`, `AgentRunResult` and `AgentRunStatus` contracts. No changes were made to historical runners, their tests, or console/evaluation routing.
+- Omitted/null `MaxDuration` now selects a 30-second deadline. Explicit duration bounds and positive `MaxModelSteps`/`MaxToolCalls` are validated during construction.
+- Results report model-request attempts and processed tool-call attempts, including unknown tools, validation errors and cap rejections. Failed model requests and interrupted tools are counted; pre-cancelled runs start with zero counts. Each run resets its counters.
+- Added `BudgetExceeded` and typed stop reasons. Duration expiry uses `DurationLimit`; caller cancellation remains `Cancelled`. The current single round checks the model-step budget before requesting a final answer: needing another request at the limit returns `ModelStepLimit` and no intermediate response. A direct answer at the limit still completes.
+- Counters and stop reasons are included in run-level logs/spans. Token usage aggregation and payload privacy remain covered by tests.
+- Whole-batch tool-budget stopping and repeated execution are still deferred to Part 3. The current tool cap retains partial execution and matching per-call rejection results; a final model response can still complete that run. `ToolCallLimit` is reserved for the later stop policy.
+
+### Verification
+
+- `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunner`: passed, 37 tests, 0 failures.
+- `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 183 tests, 0 failures.
+- Editor diagnostics reported no errors in the runner or its tests. Verification used scripted clients and no live model requests.
