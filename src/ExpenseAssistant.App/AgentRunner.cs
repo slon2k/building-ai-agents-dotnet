@@ -114,17 +114,25 @@ public sealed class AgentRunner
 						stopReason: AgentStopReason.ToolCallLimit);
 				}
 
-				List<AIContent> results = [];
+				Dictionary<string, FunctionResultContent> results = new(StringComparer.Ordinal);
 				foreach (FunctionCallContent call in calls)
 				{
 					runToken.ThrowIfCancellationRequested();
 					object? result = await ExecuteToolAsync(call, runToken);
 					runToken.ThrowIfCancellationRequested();
-					results.Add(new FunctionResultContent(call.CallId, result));
+					results.Add(call.CallId, new FunctionResultContent(call.CallId, result));
 				}
 
-				messages.AddRange(response.Messages);
-				messages.Add(new ChatMessage(ChatRole.Tool, results));
+				foreach (ChatMessage message in response.Messages)
+				{
+					messages.Add(message);
+					List<AIContent> messageResults = message.Contents.OfType<FunctionCallContent>()
+						.Select(call => (AIContent)results[call.CallId]).ToList();
+					if (messageResults.Count > 0)
+					{
+						messages.Add(new ChatMessage(ChatRole.Tool, messageResults));
+					}
+				}
 			}
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

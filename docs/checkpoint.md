@@ -243,3 +243,43 @@ Run and record Experiment A, retain the qualified review findings, and then clos
 - New coverage includes dependent calls across three model requests, validation correction, repeated tool selection, model-step limits, exact tool-budget exhaustion, oversized initial/later batches, cross-step ID reuse, and cancellation/duration expiry on a third model request.
 - Telemetry tests cover step numbers, aggregate usage, budget stop reasons, rejected-call metadata and payload privacy. Editor diagnostics reported no errors in the runner or its tests.
 - Verification used scripted clients and local functions. No paid model calls, console smoke test or live multistep evaluation was performed; the active console still uses `ToolChatRunner`.
+
+## Module 3 Part 4 Checkpoint
+
+### Message Integrity
+
+- Recorded on 2026-10-30 for the working-tree implementation. Historical runners, their tests, and current console/evaluation routing were not modified.
+- A new regression test exposed an ordering gap: several assistant messages with tool requests were followed by one combined tool-result message. The test failed because an assistant message appeared where matching tool results were required.
+- `AgentRunner` now stages results by call ID and appends each original assistant message followed immediately by its own ordered tool results. Original message objects, mixed text/tool content, text-only messages and final multi-message responses are preserved rather than rewritten.
+- The regression covers successful calls, unknown tools, invalid arguments and a query failure in the same response. Each requested call gets exactly one matching result in call order; a failure does not omit later results.
+- Interruption tests cover cancellation and duration expiry in the second call after the first succeeds, plus whole-batch budget rejection and invalid IDs across assistant messages. The third call does not execute after interruption, no partial exchange is sent to another model request, and the same runner/session starts a later run with fresh messages and counters.
+- The guarantee is limited to run-local history and the actual messages sent to the model. There is no exposed/persisted conversation history yet. Discarding partial conversation state does not roll back work already executed; this module's tools remain read-only.
+
+### Part 4 Verification
+
+- The multi-message regression was first run against the previous history assembly and failed as expected, then passed after the local ordering fix.
+- `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunner`: passed, 53 tests, 0 failures.
+- `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 199 tests, 0 failures.
+- Editor diagnostics reported no errors in the runner or its tests. Verification used scripted clients/local functions; no model requests, persistent-session checks, or live-provider protocol verification were performed.
+
+## Module 3 Part 5 Checkpoint
+
+### Failure and Retry Policy
+
+- Recorded on 2026-10-30 for the working-tree implementation. Historical runner sources/tests, console routing and evaluation routing remain unchanged.
+- The installed provider dependencies are OpenAI `2.14.0` and System.ClientModel `1.15.0`, via Microsoft.Extensions.AI.OpenAI `10.11.0`. The [OpenAI .NET retry documentation](https://github.com/openai/openai-dotnet#automatically-retrying-errors) describes up to three additional attempts for transient HTTP errors.
+- The shared `AzureOpenAIChatClientFactory` now makes that existing bound explicit with `MaxProviderRetries = 3` and `ClientRetryPolicy`. The original one-argument `Create` API remains intact; an overload accepts a pipeline transport for offline tests. This policy applies to all callers of the shared factory, without changing historical runner implementations.
+- SDK-managed retries handle HTTP 408, 429, 500, 502, 503 and 504. Tests verify recovery within one logical model step and a maximum of four HTTP sends when failures persist. HTTP 400, 401, 403, 404 and 422 fail after one send.
+- `AgentRunner` has no application retry wrapper. Exhausted/nonretryable provider failures produce `Failed`, a generic error, no final response and unknown usage for the failed logical request. Raw provider error bodies are not returned to the caller.
+- Existing dispatcher handling returns safe `TOOL_FAILED` envelopes for unavailable functions, without a fabricated result. The SDK-backed test confirms that this envelope reaches the next model request and the run can continue. This does not grade the final model answer's honesty or quality.
+- SDK retries occur inside the logical model request with the existing run token. Tests interrupt a 60-second `Retry-After` delay through caller cancellation or the one-second run deadline; neither case sends another HTTP attempt. Caller cancellation remains `Cancelled`, while duration expiry is `BudgetExceeded`/`DurationLimit`.
+- A transient failure after a completed tool retries only the same follow-up HTTP request: the tool executes once, the request body stays unchanged across retry, and the result counts two logical model steps rather than three HTTP sends.
+- Logical step usage is aggregated as before; successful response usage is not proof of total billed cost across failed provider attempts. Actual per-request SDK retry counts are not currently exported in run results/spans; tests observe them at the transport boundary.
+
+### Part 5 Verification
+
+- `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AzureOpenAIChatClientFactoryTests`: passed, 16 tests, 0 failures.
+- `dotnet test ExpenseAssistant.slnx --configuration Release`: passed, 215 tests, 0 failures.
+- Editor diagnostics reported no errors in the factory or its new tests. The tests use the real installed SDK and adapter with an in-memory HTTP handler, synthetic credentials and a reserved `.invalid` endpoint; no HTTP traffic leaves the handler and no paid model calls are made.
+- The initial backoff test used an unsupported millisecond retry header and failed its attempt-count assertion. Switching the test to standard `Retry-After` verified the intended SDK backoff interruption without changing runner behavior.
+- No live cloud failure experiment, interactive smoke test or live multistep answer evaluation was performed. Expanded retry telemetry remains a Part 6 consideration rather than a claimed feature here.

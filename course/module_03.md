@@ -130,6 +130,8 @@ A completed run does **not** necessarily mean the user’s task succeeded. A cla
 
 ## Implementation plan
 
+The examples below illustrate responsibilities, not a required class layout. Choose an implementation that satisfies the behavioral requirements, and record design decisions and verification evidence in the cumulative checkpoint.
+
 ### Part 1 — Extract an agent runner
 
 Introduce an application component responsible for orchestration:
@@ -151,8 +153,6 @@ Keep responsibilities separate:
 - Diagnostics record what happened.
 
 Avoid building a general-purpose framework. Implement only what this project needs.
-
-Keep `ChatRunner` and `ToolChatRunner` unchanged as historical exercises. Add `AgentRunner` with a separate `ToolDispatcher`, reusing the existing expense tools and query services. In Part 1, keep the executable single-round behavior and current result contract while establishing these responsibilities. Leave console and evaluation routing unchanged until the agent path is ready. The new run contracts and repeated execution arrive in Parts 2 and 3; Part 1 alone is not yet a multi-step agent.
 
 ### Part 2 — Define run options and results
 
@@ -226,6 +226,8 @@ Preserve:
 - Their execution order.
 
 Do not replace tool results with invented assistant messages or omit failed calls.
+
+When a model response contains several messages, preserve the tool-call/result ordering required by the provider. If a batch is interrupted, any history reused by later model requests must still contain valid exchanges. Discarding partial history does not roll back operations that already executed.
 
 This will also matter when we introduce context trimming in Module 5.
 

@@ -507,6 +507,154 @@ public class AgentRunnerTests
         Assert.Equal(2, result.ModelStepCount);
     }
 
+    [Fact]
+    public async Task RunAsync_WithMultipleAssistantMessages_PreservesCompleteExchanges()
+    {
+        List<string> executions = [];
+        AIFunction function = AIFunctionFactory.Create((string value) =>
+        {
+            executions.Add(value);
+            return value == "fail"
+                ? ToolResult<string>.Failure(new Error("QUERY_FAILED", "The query could not be completed."))
+                : ToolResult<string>.Success(value);
+        }, "Record");
+        var introduction = new ChatMessage(ChatRole.Assistant, "Checking both requests.");
+        var first = new ChatMessage(ChatRole.Assistant, [
+            new TextContent("First batch."), Call("first", "Record", "{\"value\":\"one\"}"), Call("unknown", "Missing")]);
+        var between = new ChatMessage(ChatRole.Assistant, "Checking the remaining requests.");
+        var second = new ChatMessage(ChatRole.Assistant, [
+            Call("invalid", "Record"), Call("failure", "Record", "{\"value\":\"fail\"}"),
+            Call("second", "Record", "{\"value\":\"two\"}")]);
+        var closing = new ChatMessage(ChatRole.Assistant, "Ready to summarize.");
+        var final = new ChatResponse([
+            new ChatMessage(ChatRole.Assistant, "First answer."),
+            new ChatMessage(ChatRole.Assistant, "Second answer.")]);
+        var client = Client(new ChatResponse([introduction, first, between, second, closing]), final);
+
+        AgentRunResult result = await CreateRunner(client, [function], maxToolCalls: 6)
+            .RunAsync(Guid.NewGuid(), "Record both", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Same(final, result.Response);
+        Assert.Equal(new[] { "one", "fail", "two" }, executions);
+        Assert.Equal(5, result.ToolCallCount);
+        Assert.All(client.ReceivedRequests, AssertCompleteToolExchanges);
+        IReadOnlyList<ChatMessage> messages = client.ReceivedRequests[1];
+        Assert.Equal(9, messages.Count);
+        Assert.Same(introduction, messages[2]);
+        Assert.Same(first, messages[3]);
+        Assert.Same(between, messages[5]);
+        Assert.Same(second, messages[6]);
+        Assert.Same(closing, messages[8]);
+        FunctionResultContent[] firstResults = messages[4].Contents.OfType<FunctionResultContent>().ToArray();
+        FunctionResultContent[] secondResults = messages[7].Contents.OfType<FunctionResultContent>().ToArray();
+        Assert.Equal("one", Envelope(firstResults[0]).GetProperty("result").GetString());
+        Assert.Equal("UNKNOWN_TOOL", Envelope(firstResults[1]).GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("INVALID_ARGUMENTS", Envelope(secondResults[0]).GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("QUERY_FAILED", Envelope(secondResults[1]).GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("two", Envelope(secondResults[2]).GetProperty("result").GetString());
+    }
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("timeout")]
+    [InlineData("budget")]
+    [InlineData("ids")]
+    public async Task RunAsync_WhenBatchIsIncomplete_DoesNotSendPartialHistoryOrCarryItToNextRun(string interruption)
+    {
+        using var cancellation = new CancellationTokenSource();
+        List<int> executions = [];
+        AIFunction function = AIFunctionFactory.Create(async (int index, CancellationToken cancellationToken) =>
+        {
+            executions.Add(index);
+            if (index == 2)
+            {
+                if (interruption == "cancel")
+                {
+                    cancellation.Cancel();
+                }
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            return ToolResult<string>.Success($"result-{index}");
+        }, "Record");
+        var firstMessage = new ChatMessage(ChatRole.Assistant,
+            [new TextContent("UNFINISHED"), Call("first", "Record", "{\"index\":1}")]);
+        var secondMessage = new ChatMessage(ChatRole.Assistant, [
+            Call(interruption == "ids" ? "first" : "second", "Record", "{\"index\":2}"),
+            Call("third", "Record", "{\"index\":3}")]);
+        var client = Client(new ChatResponse([firstMessage, secondMessage]), Reply("Fresh answer."));
+        var runner = CreateRunner(client, [function], maxToolCalls: interruption == "budget" ? 1 : 4,
+            timeout: interruption == "timeout" ? TimeSpan.FromSeconds(1) : null);
+        Guid sessionId = Guid.NewGuid();
+
+        AgentRunResult incomplete = await runner.RunAsync(sessionId, "First question", cancellation.Token);
+
+        Assert.Equal(interruption switch
+        {
+            "cancel" => AgentRunStatus.Cancelled,
+            "ids" => AgentRunStatus.Failed,
+            _ => AgentRunStatus.BudgetExceeded
+        }, incomplete.Status);
+        Assert.Equal(interruption switch
+        {
+            "timeout" => AgentStopReason.DurationLimit,
+            "budget" => AgentStopReason.ToolCallLimit,
+            _ => (AgentStopReason?)null
+        }, incomplete.StopReason);
+        Assert.Null(incomplete.Response);
+        Assert.Equal(1, incomplete.ModelStepCount);
+        Assert.Equal(interruption switch { "budget" => 3, "ids" => 0, _ => 2 }, incomplete.ToolCallCount);
+        Assert.Equal(interruption is "budget" or "ids" ? Array.Empty<int>() : new[] { 1, 2 }, executions);
+        Assert.Single(client.ReceivedRequests);
+
+        AgentRunResult fresh = await runner.RunAsync(sessionId, "Second question", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, fresh.Status);
+        Assert.Equal("Fresh answer.", fresh.Response?.Text);
+        Assert.Equal(sessionId, fresh.SessionId);
+        Assert.NotEqual(incomplete.RunId, fresh.RunId);
+        Assert.Equal(1, fresh.ModelStepCount);
+        Assert.Equal(0, fresh.ToolCallCount);
+        Assert.Equal(2, client.ReceivedRequests.Count);
+        Assert.All(client.ReceivedRequests, messages =>
+        {
+            Assert.Equal(2, messages.Count);
+            AssertCompleteToolExchanges(messages);
+        });
+        Assert.Equal("Second question", client.ReceivedRequests[1][1].Text);
+        Assert.DoesNotContain(firstMessage, client.ReceivedRequests[1]);
+        Assert.DoesNotContain(secondMessage, client.ReceivedRequests[1]);
+    }
+
+    private static void AssertCompleteToolExchanges(IReadOnlyList<ChatMessage> messages)
+    {
+        List<string> pendingCallIds = [];
+        foreach (ChatMessage message in messages)
+        {
+            if (pendingCallIds.Count > 0)
+            {
+                Assert.Equal(ChatRole.Tool, message.Role);
+            }
+            if (message.Role == ChatRole.Tool)
+            {
+                Assert.NotEmpty(pendingCallIds);
+                Assert.All(message.Contents, content => Assert.IsType<FunctionResultContent>(content));
+                Assert.Equal(pendingCallIds, message.Contents.OfType<FunctionResultContent>().Select(result => result.CallId));
+                pendingCallIds.Clear();
+            }
+            else
+            {
+                FunctionCallContent[] calls = message.Contents.OfType<FunctionCallContent>().ToArray();
+                if (calls.Length > 0)
+                {
+                    Assert.Equal(ChatRole.Assistant, message.Role);
+                    pendingCallIds.AddRange(calls.Select(call => call.CallId));
+                }
+            }
+        }
+        Assert.Empty(pendingCallIds);
+    }
+
     private static AgentRunner CreateRunner(FakeChatClient client, IReadOnlyList<AIFunction>? functions = null,
         int maxToolCalls = 4, TimeSpan? timeout = null, int maxModelSteps = 6) =>
         new(client, new ToolDispatcher(functions ?? []), "Use tools.",

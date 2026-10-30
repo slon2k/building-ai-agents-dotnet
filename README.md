@@ -125,10 +125,22 @@ Part 3 repeats model/tool cycles until a response contains no tool requests or a
 
 No additional model request is initiated after either count budget is exhausted. Stops return `BudgetExceeded` with `ModelStepLimit` or `ToolCallLimit`, and never expose an intermediate response as a completed answer. A direct answer on the last allowed model step still completes; if both count limits are exhausted together, `ModelStepLimit` takes precedence. One deadline spans all steps and tool executions rather than restarting each cycle. Conversation history remains local to the run; persistence is not implemented.
 
+Part 4 preserves each original assistant message and inserts its matching tool results immediately after it, including when a single model response contains several assistant messages. Result ordering follows call ordering within that message; successful, unknown-tool, validation-error and query-failure results are all retained. Results are staged until the accepted batch finishes, so cancellation or timeout after some calls complete does not send a partial exchange to another model request. A later run starts with fresh history and counters. Discarding partial conversation state does not undo operations already executed; persistent/reusable session history is still outside this implementation.
+
+Part 5 keeps tool errors recoverable within the remaining budgets: unknown tools, invalid arguments and unavailable functions return safe structured failures, not successful empty data. Unexpected function failures use `TOOL_FAILED`; query failures retain `QUERY_FAILED`. Provider request failures terminate the run with a generic safe error after the SDK's retry policy is exhausted. Configuration validation remains at startup; authentication/authorization failures are not retried.
+
+`AzureOpenAIChatClientFactory.MaxProviderRetries` explicitly sets the provider SDK to at most three additional HTTP attempts (four sends total per logical model request), preserving its documented default bound. HTTP 408, 429, 500, 502, 503 and 504 are retryable with SDK-managed backoff; 400, 401, 403, 404 and 422 are not retried. There is no runner/application retry wrapper, so retries do not restart completed tools or multiply through another retry layer. The same run cancellation token and deadline cover SDK retry backoff and tool execution. `ModelStepCount` counts logical model calls, not HTTP attempts. Actual retry counts are not currently exposed in run results/spans, and usage reports cannot establish the complete billed cost of failed HTTP attempts. The original factory API is retained; a transport-injection overload supports offline HTTP tests without network activity.
+
 The new runner exposes correlated spans through `ExpenseAssistant.App.AgentRunner` and uses `ILogger<AgentRunner>` without logging prompts, response text, or tool payloads. Model requests use `model.step` spans with a one-based `model.step` tag; tool spans carry the corresponding step number. Run diagnostics include counters and stop reasons. Rejected batches log safe call IDs, allowlisted tool names and budget metadata without execution spans. The runner accepts a dispatcher constructed from `new ExpenseTools(queries).CreateFunctions()`. It is currently invoked through offline tests, not the interactive app; no live multistep evaluation has been recorded.
 
 ```shell
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AgentRunner
+```
+
+Run the SDK transport/failure checks without credentials or network requests:
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release --filter FullyQualifiedName~AzureOpenAIChatClientFactoryTests
 ```
 
 ### Logging and tracing
