@@ -1,5 +1,7 @@
 using ExpenseAssistant.Infrastructure;
+using ExpenseAssistant.Core;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -7,6 +9,30 @@ namespace ExpenseAssistant.App;
 
 public static class ServiceCollectionExtensions
 {
+    public static IServiceCollection AddEmbeddings(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddSingleton<IEmbeddings>(provider =>
+        {
+            AzureOpenAIOptions options = provider.GetRequiredService<IConfiguration>()
+                .GetSection(AzureOpenAIOptions.SectionName)
+                .Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
+            return new AzureOpenAIEmbeddings(options, provider.GetRequiredService<ILogger<AzureOpenAIEmbeddings>>());
+        });
+        services.AddScoped<TransactionIndexPopulator>();
+        services.AddSingleton(provider =>
+        {
+            IConfiguration config = provider.GetRequiredService<IConfiguration>();
+            AzureOpenAIOptions options = config.GetSection(AzureOpenAIOptions.SectionName)
+                .Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
+            return EmbeddingIndexConfiguration.Create(options,
+                config["EmbeddingIndex:IndexId"] ?? "expenses-v1",
+                config["EmbeddingIndex:ModelConfigurationVersion"] ?? "v1");
+        });
+        return services;
+    }
+
     public static IServiceCollection AddAgentRunner(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);

@@ -54,7 +54,10 @@ string connectionString = builder.Configuration.GetConnectionString("Expenses")
 
 builder.Services.AddDbContext<ExpenseDbContext>(options => options.UseSqlite(connectionString));
 builder.Services.AddScoped<ITransactionQueries, TransactionQueries>();
-builder.Services.AddScoped<ExpenseTools>();
+builder.Services.AddScoped<ITransactionSemanticSearch, TransactionSemanticSearch>();
+builder.Services.AddScoped(provider => new ExpenseTools(
+    provider.GetRequiredService<ITransactionQueries>(),
+    () => provider.GetRequiredService<ITransactionSemanticSearch>()));
 
 builder.Services.AddSingleton(services =>
 {
@@ -75,6 +78,7 @@ builder.Services.AddSingleton(services =>
 });
 
 builder.Services.AddChatClient();
+builder.Services.AddEmbeddings();
 builder.Services.AddAgentRunner();
 builder.Services.AddToolChatRunner();
 builder.Services.AddSingleton<ConsoleChat>();
@@ -85,6 +89,11 @@ CancellationToken stoppingToken = host.Services.GetRequiredService<IHostApplicat
 
 try
 {
+    if (args.Contains("--seed-only", StringComparer.OrdinalIgnoreCase)
+        && args.Contains("--index-only", StringComparer.OrdinalIgnoreCase))
+    {
+        throw new ArgumentException("Choose either --seed-only or --index-only, not both.");
+    }
 	await using (AsyncServiceScope scope = host.Services.CreateAsyncScope())
 	{
 		ExpenseDbContext context = scope.ServiceProvider.GetRequiredService<ExpenseDbContext>();
@@ -99,10 +108,28 @@ try
 		return;
 	}
 
+	if (args.Contains("--index-only", StringComparer.OrdinalIgnoreCase))
+	{
+		await using AsyncServiceScope scope = host.Services.CreateAsyncScope();
+		EmbeddingIndexConfiguration index = scope.ServiceProvider.GetRequiredService<EmbeddingIndexConfiguration>();
+		IndexPopulationResult result = await scope.ServiceProvider.GetRequiredService<TransactionIndexPopulator>()
+		    .PopulateAsync(index.IndexId, index.ModelConfigurationId, stoppingToken);
+		Console.WriteLine($"Index {result.IndexId}: generated {result.GeneratedCount}, reused {result.ReusedCount}, removed {result.RemovedCount}; dimensions {result.Dimensions}.");
+		return;
+	}
+
 	await host.Services.GetRequiredService<ConsoleChat>().RunAsync(stoppingToken);
 }
 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
 {
+    Environment.ExitCode = 1;
+    Console.Error.WriteLine("Operation cancelled.");
+}
+catch (Exception)
+{
+    host.Services.GetRequiredService<ILogger<Program>>().LogError("Application failed ErrorCode={ErrorCode}", "APPLICATION_FAILED");
+    Console.Error.WriteLine("Operation failed. Check configuration, database schema, and application logs.");
+    throw;
 }
 finally
 {

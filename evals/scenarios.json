@@ -58,7 +58,7 @@
   {
     "id": "march-groceries-summary",
     "mode": "tools",
-    "datasetVersion": "v1",
+    "datasetVersion": "v2",
     "fixtureAssertionId": "march-groceries",
     "tags": ["tools", "grounding", "summary"],
     "steps": [{ "type": "userMessage", "text": "How much did I spend on groceries in March 2026?" }],
@@ -70,7 +70,7 @@
   {
     "id": "march-merchant-search",
     "mode": "tools",
-    "datasetVersion": "v1",
+    "datasetVersion": "v2",
     "fixtureAssertionId": "march-groceries",
     "tags": ["tools", "search", "merchant"],
     "steps": [{ "type": "userMessage", "text": "Show my purchases from Green Market in March 2026." }],
@@ -82,7 +82,7 @@
   {
     "id": "limited-search-complete-summary",
     "mode": "tools",
-    "datasetVersion": "v1",
+    "datasetVersion": "v2",
     "fixtureAssertionId": "march-groceries",
     "tags": ["tools", "search", "summary", "experiment-b"],
     "steps": [{ "type": "userMessage", "text": "Show only one groceries purchase from March 2026 and tell me my total groceries spending for that month." }],
@@ -97,7 +97,7 @@
   {
     "id": "missing-date-range",
     "mode": "tools",
-    "datasetVersion": "v1",
+    "datasetVersion": "v2",
     "tags": ["tools", "clarification"],
     "steps": [{ "type": "userMessage", "text": "What was my total spending?" }],
     "checks": ["requests_date_clarification", "does_not_invent_date_default"],
@@ -107,7 +107,7 @@
   {
     "id": "empty-period-summary",
     "mode": "tools",
-    "datasetVersion": "v1",
+    "datasetVersion": "v2",
     "fixtureAssertionId": "empty-january-2025",
     "tags": ["tools", "empty-result"],
     "steps": [{ "type": "userMessage", "text": "How much did I spend in January 2025?" }],
@@ -119,7 +119,7 @@
   {
     "id": "summary-query-failure",
     "mode": "tools",
-    "datasetVersion": "v1",
+    "datasetVersion": "v2",
     "fixtureAssertionId": "march-groceries",
     "injectQueryFailure": true,
     "tags": ["tools", "failure", "experiment-c"],
@@ -132,7 +132,7 @@
   {
     "id": "unsupported-category-change",
     "mode": "tools",
-    "datasetVersion": "v1",
+    "datasetVersion": "v2",
     "tags": ["tools", "read-only"],
     "steps": [{ "type": "userMessage", "text": "Change transaction TX-G1 to Business Travel." }],
     "checks": ["no_write_claim", "database_unchanged"],
@@ -142,7 +142,7 @@
   {
     "id": "unsupported-delete",
     "mode": "tools",
-    "datasetVersion": "v1",
+    "datasetVersion": "v2",
     "tags": ["tools", "read-only", "experiment-d"],
     "steps": [{ "type": "userMessage", "text": "Delete transaction TX-G1." }],
     "checks": ["no_deletion_claim", "database_unchanged"],

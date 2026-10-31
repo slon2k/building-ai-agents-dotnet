@@ -1,0 +1,68 @@
+{
+  "datasetVersion": "v2",
+  "labelVersion": "draft-v1",
+  "scenarios": [
+    {
+      "id": "remote-work-march", "query": "remote-work expenses", "startDate": "2026-03-01", "endDate": "2026-04-01",
+      "relevantIds": ["TX-C001", "TX-C002"], "ambiguousIds": ["TX-A013", "TX-A021", "TX-E085"],
+      "notes": "Candidate equipment relevance, not proof of business purpose. Review every March record; heating and headset purpose are ambiguous."
+    },
+    {
+      "id": "remote-work-all", "query": "remote-work expenses",
+      "relevantIds": ["TX-C001", "TX-C002", "TX-C003", "TX-C004", "TX-C005", "TX-C025", "TX-C026", "TX-C027", "TX-C028", "TX-C029", "TX-C049", "TX-C050"],
+      "ambiguousIds": ["TX-A001", "TX-A009", "TX-A013", "TX-A021", "TX-A025"],
+      "notes": "Equipment, shared workspace and collaboration tools are candidates. Connectivity/headset purpose is ambiguous; review completeness."
+    },
+    {
+      "id": "streaming", "query": "streaming entertainment subscriptions",
+      "relevantIds": ["TX-C006", "TX-C007", "TX-C008", "TX-C009", "TX-C030", "TX-C031", "TX-C032", "TX-C033"],
+      "ambiguousIds": ["TX-A003", "TX-A015"],
+      "notes": "Films/music/audiobooks/cloud games count as digital entertainment; generic subscriptions ambiguous."
+    },
+    {
+      "id": "streaming-software", "query": "streaming entertainment subscriptions", "categoryId": "software",
+      "relevantIds": ["TX-C006", "TX-C007", "TX-C008", "TX-C009", "TX-C030", "TX-C031", "TX-C032", "TX-C033"],
+      "ambiguousIds": ["TX-A003", "TX-A015"], "notes": "Same relevance policy as streaming, with exact Software restriction."
+    },
+    {
+      "id": "leisure-travel", "query": "holiday and leisure travel",
+      "relevantIds": ["TX-C010", "TX-C011", "TX-C012", "TX-C013", "TX-C034", "TX-C035", "TX-C036", "TX-C037"],
+      "ambiguousIds": ["TX-A005", "TX-A006", "TX-A017", "TX-A018"],
+      "notes": "Guesthouse, excursion, luggage and museum are leisure candidates; unqualified rooms/train tickets ambiguous."
+    },
+    {
+      "id": "client-meetings", "query": "client meetings and business trips",
+      "relevantIds": ["TX-C014", "TX-C015", "TX-C016", "TX-C017", "TX-C038", "TX-C039", "TX-C040", "TX-C041"],
+      "ambiguousIds": ["TX-A007", "TX-A019"], "notes": "Explicit customer/supplier/conference descriptions are candidates; ordinary group lunch is ambiguous."
+    },
+    {
+      "id": "home-maintenance", "query": "repairing and maintaining the home",
+      "relevantIds": ["TX-C018", "TX-C019", "TX-C020", "TX-C042", "TX-C043", "TX-C044"],
+      "ambiguousIds": ["TX-D002", "TX-D014"],
+      "notes": "Plumbing repair and decorating supplies; water-filter replacement is ambiguous under this definition."
+    },
+    {
+      "id": "fitness", "query": "exercise and outdoor fitness",
+      "relevantIds": ["TX-C021", "TX-C022", "TX-C023", "TX-C024", "TX-C045", "TX-C046", "TX-C047", "TX-C048"],
+      "ambiguousIds": ["TX-A011", "TX-A023"], "notes": "Hiking, bicycle maintenance, swimming and classes; jacket alone does not establish activity."
+    },
+    {
+      "id": "exact-green-market-march", "query": "Green Market", "startDate": "2026-03-01", "endDate": "2026-04-01",
+      "split": "held-out", "relevantIds": ["TX-G1", "TX-G2"],
+      "notes": "Exact-merchant diagnostic; the agent should prefer exact retrieval, not semantic search. This runner evaluates retrieval only."
+    },
+    {
+      "id": "remote-work-before-march", "query": "remote-work expenses", "endDate": "2026-03-01",
+      "split": "held-out", "relevantIds": [], "ambiguousIds": ["TX-A001", "TX-A009"],
+      "notes": "No clear desk/collaboration candidates before March; headset and internet are ambiguous. Review all eligible records."
+    },
+    {
+      "id": "absent-dental", "query": "dental treatment and orthodontics",
+      "split": "held-out", "relevantIds": [], "notes": "Proposed absent concept. Review the entire fixture before accepting no-relevant judgment."
+    },
+    {
+      "id": "empty-period", "query": "collaboration software", "startDate": "2025-01-01", "endDate": "2025-02-01",
+      "split": "held-out", "relevantIds": [], "notes": "No eligible records; no query embedding call should be made."
+    }
+  ]
+}

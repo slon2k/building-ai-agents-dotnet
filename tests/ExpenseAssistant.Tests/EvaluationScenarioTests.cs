@@ -23,7 +23,7 @@ public class EvaluationScenarioTests
 
         Assert.Equal("Completed", result.Status);
         Assert.Equal("NotReviewed", result.ManualReview);
-        Assert.Equal("v1", result.DatasetVersion);
+        Assert.Equal("v2", result.DatasetVersion);
         Assert.All(result.DeterministicChecks!, check => Assert.True(check.Value, check.Key));
         ToolCallEvidence call = Assert.Single(result.ToolCalls!);
         Assert.Equal("summary-call", call.CallId);
@@ -149,7 +149,7 @@ public class EvaluationScenarioTests
 
     [Theory]
     [InlineData("{\"Mode\":\"unknown\"}")]
-    [InlineData("{\"DatasetVersion\":\"v2\"}")]
+    [InlineData("{\"DatasetVersion\":\"v1\"}")]
     [InlineData("{\"ExpectedToolCalls\":null}")]
     [InlineData("{\"ExpectedToolCalls\":[null]}")]
     [InlineData("{\"ExpectedToolCalls\":[{\"Name\":\"DeleteTransaction\",\"Arguments\":{}}]}")]
@@ -213,7 +213,7 @@ public class EvaluationScenarioTests
 
     private static EvaluationScenario CreateScenario() => new()
     {
-        Id = "march-groceries", Mode = "tools", DatasetVersion = "v1", FixtureAssertionId = "march-groceries",
+        Id = "march-groceries", Mode = "tools", DatasetVersion = "v2", FixtureAssertionId = "march-groceries",
         Steps = [new EvaluationStep { Type = "userMessage", Text = "March 2026 groceries?" }],
         Checks = ["grounded_summary"], CheckMode = "manual", ExpectedBehavior = "Uses the fixture summary.",
         ExpectedToolCalls = [new ExpectedToolCall
@@ -230,7 +230,7 @@ public class EvaluationScenarioTests
 
     private static FixtureAssertions Fixtures() => new()
     {
-        DatasetVersion = "v1",
+        DatasetVersion = "v2",
         Assertions = new Dictionary<string, FixtureAssertion>
         {
             ["march-groceries"] = new()

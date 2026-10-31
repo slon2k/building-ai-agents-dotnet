@@ -100,7 +100,7 @@ public class ExpenseToolsTests
         Assert.Equal(20, search.ReturnedCount);
         Assert.True(search.HasMore);
         Assert.All(search.Transactions, transaction => Assert.Equal(3, transaction.Date.Month));
-        Assert.Equal(22, summary.TransactionCount);
+        Assert.Equal(42, summary.TransactionCount);
         Assert.Equal("EUR", summary.Currency);
         Assert.True(summary.CategoryTotals.Count > 1);
     }

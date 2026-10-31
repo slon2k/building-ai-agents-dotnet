@@ -7,6 +7,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 
+if (args.Contains("--retrieval", StringComparer.Ordinal))
+{
+	return await RetrievalCommand.RunAsync(args.Where(arg => arg != "--retrieval").ToArray());
+}
+
 bool validateOnly = false;
 string mode = "model-only";
 string? scenarioFile = null;
@@ -161,4 +166,3 @@ Console.WriteLine("Review each response against its expected behavior. ManualRev
 
 return scenarioResults.All(result => result.Status == nameof(ChatRunStatus.Completed)
 	&& result.DeterministicChecks!.Values.All(passed => passed)) ? 0 : 1;
-

@@ -4,19 +4,83 @@ using Microsoft.Extensions.AI;
 
 namespace ExpenseAssistant.App;
 
-public class ExpenseTools(ITransactionQueries queries)
+public class ExpenseTools(ITransactionQueries queries, Func<ITransactionSemanticSearch>? semanticSearchFactory = null)
 {
-    public IReadOnlyList<AIFunction> CreateFunctions() =>
-    [
-        AIFunctionFactory.Create(SearchTransactionsAsync, new AIFunctionFactoryOptions
+    public IReadOnlyList<AIFunction> CreateFunctions()
+    {
+        List<AIFunction> functions =
+        [
+            AIFunctionFactory.Create(SearchTransactionsAsync, new AIFunctionFactoryOptions
+            {
+                Name = "SearchTransactions"
+            }),
+            AIFunctionFactory.Create(GetSpendingSummaryAsync, new AIFunctionFactoryOptions
+            {
+                Name = "GetSpendingSummary"
+            })
+        ];
+        if (semanticSearchFactory is not null)
         {
-            Name = "SearchTransactions"
-        }),
-        AIFunctionFactory.Create(GetSpendingSummaryAsync, new AIFunctionFactoryOptions
+            functions.Add(AIFunctionFactory.Create(SearchTransactionsByMeaningAsync, new AIFunctionFactoryOptions
+            {
+                Name = "SearchTransactionsByMeaning"
+            }));
+        }
+        return functions.AsReadOnly();
+    }
+
+    [Description("""
+        Find candidate transactions by meaning, such as purchases possibly
+        related to remote work or streaming entertainment. Optional exact
+        date and category filters are applied before similarity ranking.
+        Returns transaction facts and stable IDs with cosine similarity scores,
+        applied filters and eligible record count. Scores indicate ranking
+        relevance, not probabilities or proof of purchase purpose.
+        Present IDs and explain uncertainty; do not invent facts or infer
+        purpose as certain. Top-k candidates are not exhaustive; HasMore means
+        eligible records exceeded the limit, not that more relevant matches exist.
+        Use SearchTransactions for exact merchant/category retrieval and
+        GetSpendingSummary for authoritative totals. Never sum semantic
+        candidates as an authoritative concept-based spending total.
+        This tool is read-only and does not generate or repair the stored index.
+        """)]
+    public async Task<ToolResult<SemanticSearchResult>> SearchTransactionsByMeaningAsync(
+        [Description("Concept or activity to search for, such as 'remote-work expenses'. Required, nonblank, at most 2000 characters. Keep exact date/category constraints in their separate arguments.")]
+        string query,
+        [Description("Optional inclusive start date in YYYY-MM-DD format. Omit for no lower date bound.")]
+        DateOnly? startDate = null,
+        [Description("Optional exclusive end date in YYYY-MM-DD format. Must be after startDate when both are supplied. Omit for no upper date bound.")]
+        DateOnly? endDate = null,
+        [Description("Optional exact category ID, such as 'software' or 'business-travel', not an inferred concept or display name. Omit to include all categories.")]
+        string? categoryId = null,
+        [Description("Maximum candidate count, from 1 to 100. Defaults to 5. Results are ranked by similarity, then transaction ID for ties.")]
+        int limit = 5,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 2000)
         {
-            Name = "GetSpendingSummary"
-        })
-    ];
+            return new Error("INVALID_QUERY", "The semantic query must be nonblank and at most 2000 characters.");
+        }
+        Error? validationError = ValidateQueryArguments(startDate, endDate, categoryId);
+        if (validationError is not null)
+        {
+            return validationError;
+        }
+        if (limit is < 1 or > 100)
+        {
+            return new Error("INVALID_LIMIT", "The result limit must be between 1 and 100.");
+        }
+        if (semanticSearchFactory is null)
+        {
+            return new Error("SEMANTIC_SEARCH_UNAVAILABLE", "Semantic search is not configured.");
+        }
+
+        return await ExecuteAsync(
+            () => semanticSearchFactory().SearchAsync(query, startDate, endDate, categoryId, limit, cancellationToken),
+            new Error("SEMANTIC_SEARCH_FAILED",
+                "Semantic search could not be completed. No candidates are available. Check embedding configuration and ensure the index is current using --index-only."));
+    }
 
     [Description("""
         Search transactions within a date range, optionally filtered by
@@ -95,9 +159,9 @@ public class ExpenseTools(ITransactionQueries queries)
             cancellationToken));
     }
 
-    private static Error? ValidateQueryArguments(DateOnly startDate, DateOnly endDate, string? categoryId)
+    private static Error? ValidateQueryArguments(DateOnly? startDate, DateOnly? endDate, string? categoryId)
     {
-        if (endDate <= startDate)
+        if (startDate.HasValue && endDate.HasValue && endDate.Value <= startDate.Value)
         {
             return new Error("INVALID_DATE_RANGE", "The end date must be after the start date.");
         }
@@ -110,7 +174,8 @@ public class ExpenseTools(ITransactionQueries queries)
         return null;
     }
 
-    private static async Task<ToolResult<TResult>> ExecuteAsync<TResult>(Func<Task<TResult>> query) where TResult : class
+    private static async Task<ToolResult<TResult>> ExecuteAsync<TResult>(
+        Func<Task<TResult>> query, Error? failure = null) where TResult : class
     {
         try
         {
@@ -126,7 +191,7 @@ public class ExpenseTools(ITransactionQueries queries)
         }
         catch (Exception)
         {
-            return new Error("QUERY_FAILED", "The transaction query could not be completed. No result is available.");
+            return failure ?? new Error("QUERY_FAILED", "The transaction query could not be completed. No result is available.");
         }
     }
 }

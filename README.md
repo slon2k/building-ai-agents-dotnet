@@ -63,6 +63,32 @@ The console app uses the .NET Generic Host and dependency injection. Configurati
 
 Host shutdown cancellation flows to console input and active chat requests. During a run, the Esc polling delay is not itself cancelled by host shutdown: the active run must finish cancellation/cleanup before its scope is disposed. EF Core logging is limited to warnings and errors to avoid logging SQL and transaction payloads by default.
 
+### Embedding generation
+
+Core's `IEmbeddings.GenerateAsync` generates one numeric vector from text; Infrastructure's `AzureOpenAIEmbeddings` wraps `IEmbeddingGenerator<string, Embedding<float>>` using the OpenAI-compatible Azure v1 endpoint. Configure `AzureOpenAI:EmbeddingDeployment` separately from the chat `Deployment`, sharing `Endpoint` and `ApiKey`. For example, set a deployed embedding-model name through User Secrets:
+
+```shell
+dotnet user-secrets set "AzureOpenAI:EmbeddingDeployment" "<embedding-deployment-name>" --project src/ExpenseAssistant.App
+```
+
+The environment variable equivalent is `AzureOpenAI__EmbeddingDeployment`; credentials use `AzureOpenAI__ApiKey`. Registration is lazy, so seeding and chat do not require embedding configuration, and generating embeddings does not require a chat deployment. Provider errors and cancellation propagate; empty, zero-magnitude, and non-finite vectors are rejected. Logs contain timing, dimensions and available token usage, not input text or vectors. The returned vector length gives its actual dimensions; callers must enforce index/model compatibility. A deployment name alone does not pin an underlying model version.
+
+### Populate the embedding index
+
+After deploying an embedding model and configuring its deployment name, run:
+
+```shell
+dotnet run --project src/ExpenseAssistant.App -- --index-only
+```
+
+This command migrates the database, inserts missing synthetic transactions, then populates both embedding tables and exits without resolving the chat model. It makes paid embedding requests for new or changed searchable text. On an unchanged second run it reuses all vectors and makes no embedding requests. A fresh fixture generates 200 vectors; an older or edited database may contain more records.
+
+`EmbeddingIndex:IndexId` defaults to `expenses-v1`. Model compatibility is identified by the Azure endpoint, embedding deployment, and `EmbeddingIndex:ModelConfigurationVersion` (default `v1`). Increment the configuration version whenever the deployment's underlying model/version changes, even if its name and dimensions remain the same. A changed model configuration or `TransactionExtensions.TextConstructionVersion` rebuilds all vectors for that index. Changing only dates, amounts, or categories does not regenerate vectors because only trimmed merchant and description are embedded.
+
+The populator stores SHA-256 searchable-text hashes and JSON vectors, verifies consistent dimensions, and atomically commits entries plus index metadata. It holds a SQLite transaction while generating vectors to keep the source snapshot stable; run this maintenance command without concurrent writes. Provider failure or cancellation leaves the previous index intact. Corrupt stored vectors fail explicitly; rebuild using a new configuration version after investigating the error. A new empty dataset cannot establish dimensions and is rejected; an existing compatible index can be emptied. Deleting transactions cascades to embeddings immediately, so already-cascaded deletions are not included in the command's removed count.
+
+`--seed-only` and `--index-only` are mutually exclusive. Index population is not exposed as an agent tool; ordinary chat does not populate vectors.
+
 ### Seed the local database
 
 Initialize SQLite without model credentials or a model request:
@@ -73,14 +99,45 @@ dotnet run --project src/ExpenseAssistant.App -- --seed-only
 
 Normal application startup also runs initialization. By default, `expense-assistant.db` is created beside the application output. Override the SQLite connection string through `ConnectionStrings:Expenses` in configuration or the `ConnectionStrings__Expenses` environment variable.
 
-The fixed synthetic fixture `v1` contains 123 transactions across January-June 2026 and eight categories. All expenses are positive EUR amounts, with no refunds or transfers. Amounts use `decimal` in application code and integer cents in SQLite; more than two decimal places are rejected. The March groceries fixture contains exactly `TX-G1` and `TX-G2`, totaling EUR 21.25; `TX-G3` is dated April 1 and is excluded from March.
+The fixed synthetic fixture `v2` contains 200 transactions across January-June 2026 and eight categories, with 83 distinct descriptions and plausible fixed prices. It includes 97 everyday expenses, 50 clear semantic candidates, 25 ambiguous purchases, 25 misleading word-overlap examples, and the three preserved groceries records. Recurring purchases reuse descriptions and prices across months. Concepts include desk/collaboration equipment, digital entertainment, leisure travel, client meetings, home maintenance, and exercise; the fixture design groups are not stored relevance labels or proof of purchase purpose. All expenses are positive EUR amounts, with no refunds or transfers. Amounts use `decimal` in application code and integer cents in SQLite; more than two decimal places are rejected. The March groceries fixture contains exactly `TX-G1` and `TX-G2`, totaling EUR 21.25; `TX-G3` is dated April 1 and is excluded from March. Semantic date-boundary examples are `TX-C001` (March 1), `TX-C002` (March 31), and `TX-C003` (April 1).
 
-Initialization inserts missing fixture IDs atomically and preserves existing records, including edited categories. It is not a reset command: use a fresh database for baseline evaluations and tests. The initializer uses `EnsureCreatedAsync`, not migrations; it does not upgrade an existing schema.
+Initialization applies EF Core migrations, then inserts missing fixture IDs atomically and preserves existing records, including edited categories. It is not a reset command: use a fresh database for baseline evaluations and tests. Back up existing databases before applying migrations.
+
+`ExpenseDbContext` also maps `EmbeddingIndexMetadata` (key: `IndexId`) and `TransactionEmbeddings` (composite key: `IndexId`, `TransactionId`). Each vector belongs to an existing index and transaction; deleting either parent cascades to its dependent vectors, never from an index to transactions. Vectors are stored as JSON text; generation and vector-content validation are separate from these EF mappings.
+
+The initial migration creates missing tables/indexes with `IF NOT EXISTS`, supporting the course's original `EnsureCreated` transaction schema and its later schema with embedding tables. Existing tables and records are retained, and EF records the migration in its history. This adoption is only for these known course schemas, not arbitrary manually modified databases; existing table definitions are not repaired. The initial migration cannot be rolled back by dropping tables because they may predate migrations; restore a backup instead.
+
+The repository-local `dotnet-ef` tool and design-time context factory support future migrations without chat credentials:
+
+```shell
+dotnet tool restore
+dotnet ef migrations add <MigrationName> --project src/ExpenseAssistant.Infrastructure
+```
+
+Normal startup applies pending migrations to the configured application database. To apply them explicitly with `dotnet ef database update --project src/ExpenseAssistant.Infrastructure`, set `ConnectionStrings__Expenses` to the intended SQLite connection string first. The design-time default is `expense-assistant.db` in the working directory, whereas the runtime default is beside the application output.
+
+The `v2` generated IDs use `TX-E`, `TX-C`, `TX-A`, and `TX-D` prefixes rather than reusing the old `TX-001`-style IDs. Initializing an existing complete `v1` database therefore retains its 120 older generated records and adds 197 new records (320 total), without overwriting descriptions or user edits. To obtain exactly the reviewed 200-record fixture, select a new SQLite database through `ConnectionStrings:Expenses`; preserve the previous database if its edits matter. The logged dataset version identifies the seed definition, not a guarantee that an existing database matches it.
 
 Run the database tests with:
 
 ```shell
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ExpenseDbContextTests
+```
+
+### Semantic transaction search
+
+`ITransactionSemanticSearch.SearchAsync` returns a `SemanticSearchResult` with scored transaction candidates, the applied inclusive start/exclusive end/category filters, eligible count, requested limit, returned count, and `HasMore` (eligible records exceeded the limit, not proof of more relevant matches). Queries must be nonblank and at most 2,000 characters; limits are 1–100, default 5.
+
+`TransactionSemanticSearch` reads index metadata and all eligible transaction/vector pairs in one snapshot, without applying the exact-search result cap. It checks the shared model configuration identity, text-construction version, searchable-text hashes, vector validity and dimensions. Missing/stale embeddings or incompatible indexes fail explicitly; it never regenerates vectors. `DatasetVersion` is evaluation metadata, not a compatibility gate.
+
+For a valid index with no eligible records, search skips the embedding request. Otherwise it embeds the trimmed query, scores all eligible vectors with cosine similarity using double accumulators, and orders by descending score then ordinal transaction ID. Results include negative scores if they rank in top-k; no unevaluated similarity threshold is applied. Scores are not probabilities, and results are not exhaustive financial evidence. Diagnostics record index metadata, counts and timing but not query/transaction text or vectors.
+
+The interactive agent advertises `SearchTransactionsByMeaning` alongside the two exact tools. Its required `query` and optional date/category/limit arguments produce a structured `ToolResult<SemanticSearchResult>`. Validation failures use `INVALID_QUERY`, `INVALID_DATE_RANGE`, `INVALID_CATEGORY`, or `INVALID_LIMIT`; index, provider, configuration, and database failures return a safe `SEMANTIC_SEARCH_FAILED` response, while cancellation propagates. The tool description directs the agent to cite IDs, preserve uncertainty, avoid probability interpretations and authoritative totals from semantic candidates, and prefer exact tools for merchant/category retrieval and totals.
+
+`ExpenseTools` accepts an optional semantic-search factory: the interactive app supplies a scoped lazy resolver so creating tools or executing exact queries does not require embedding credentials. The historical two-tool evaluation baseline constructs `ExpenseTools` without that factory and remains unchanged; it does not advertise semantic search or require an index. Run `--index-only` first, then start normal chat and try “Find possible remote-work expenses in March 2026.” Each semantic search makes one paid query-embedding request when eligible records exist; it never updates the stored index. Live tool selection and answer quality still need behavioral evaluation.
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~TransactionSemanticSearchTests
 ```
 
 ### Transaction queries
@@ -184,9 +241,33 @@ dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter 
 
 If a running Windows console process locks Debug assemblies, add `--configuration Release` to the test command instead of stopping that session.
 
+### Module 4 retrieval scenarios
+
+Validate the draft retrieval catalog without model calls:
+
+```shell
+dotnet run --project src/ExpenseAssistant.Evals -- --retrieval --validate
+```
+
+Run paid embedding evaluations (no chat requests):
+
+```shell
+dotnet run --project src/ExpenseAssistant.Evals -- --retrieval
+```
+
+`evals/retrieval.json` contains 12 candidate query/label sets, split into tuning and held-out cases. All labels start as `draft`; review every eligible fixture record, update relevant/ambiguous IDs and notes, then set `reviewStatus` to `reviewed`. Set `relevantSetComplete` to true only after sufficiently reviewing the full relevant set. Increment `labelVersion` when labels change. Draft precision/recall/hit-rate values are null, not reported as verified metrics. Ambiguous IDs count as non-relevant unless relabeled; absent-concept queries have undefined metrics and must be reviewed via returned false positives. Held-out rows are tagged separately; do not tune against them repeatedly.
+
+The runner uses its own `evals/results/retrieval-cache.db`, ignores the application's transaction connection string, and checks cached transactions against a freshly seeded fixture fingerprint. It reuses compatible transaction embeddings on later runs; the first run normally generates 200 stored vectors. It queries semantic search once per scenario at limit 100 and derives top-3/5/10 results from that ranking, retaining top-100 diagnostic rows for missing-candidate inspection. The empty-period case makes no query-embedding request. The keyword baseline counts distinct ASCII alphanumeric query tokens found in merchant/description text, excludes zero-token matches, applies identical exact filters, and breaks ties by ordinal ID. Scores between methods are not comparable.
+
+Reports in `evals/results/retrieval-*.json` include scenario definitions, label/catalog/dataset hashes, model deployment/configuration version, index metadata, population counts, candidate facts/scores, per-k metrics and explicit failure status. They intentionally capture synthetic evaluation payloads; never use this runner for personal transaction data. No universal quality threshold is imposed. Failed scenarios return exit code 1; invalid catalogs return 2; Ctrl+C cancels. An optional catalog path is supported, with cache/reports in its adjacent `results` directory. A mismatched cache is rejected rather than overwritten: preserve it and select a new catalog directory for a fresh run.
+
+These are retrieval-only scenarios, not agent tool-selection or final-answer evaluations. Embedded-field variants and end-to-end chat review remain separate experiments. `--mode` belongs to the historical runner, not `--retrieval`.
+
+Catalog hashes identify the exact bytes loaded before execution, even if the file is edited during a run. Failed semantic rows retain safe classifications for provider HTTP status, connection failures, database failures, invalid vector JSON, invalid arguments, or index/configuration failures; raw exception messages are not included. The index/configuration category is deliberately broad because the search service does not yet expose typed failure reasons. Unexpected failures remain `RETRIEVAL_FAILED`, never successful empty results.
+
 ### Evaluation scenarios
 
-`evals/scenarios.json` retains the four Module 1 scenario IDs in `model-only` mode and adds eight Module 2 scenarios in `tools` mode. The missing-transaction-data baselines still run without tools; their original expected behavior has not been reinterpreted. Tool scenarios declare `datasetVersion: "v1"`. Independent expected totals, counts, currency and record IDs live in `evals/fixtures/v1.json`.
+`evals/scenarios.json` retains the four Module 1 scenario IDs in `model-only` mode and adds eight Module 2 scenarios in `tools` mode. The missing-transaction-data baselines still run without tools; their original expected behavior has not been reinterpreted. Tool scenarios declare `datasetVersion: "v2"`. Independent expected totals, counts, currency and record IDs live in `evals/fixtures/v2.json`.
 
 Validate the entire catalog and verify the fixture assertions against freshly seeded SQLite, without credentials or model calls:
 
@@ -201,7 +282,7 @@ dotnet run --project src/ExpenseAssistant.Evals -- --mode tools
 dotnet run --project src/ExpenseAssistant.Evals -- --mode model-only
 ```
 
-Omitting `--mode` preserves the model-only default; `--mode all` explicitly selects both groups. An optional scenario-file path is supported; its fixture assertions are resolved from the adjacent `fixtures/v1.json` file. Validation checks the whole catalog regardless of execution mode.
+Omitting `--mode` preserves the model-only default; `--mode all` explicitly selects both groups. An optional scenario-file path is supported; its fixture assertions are resolved from the adjacent `fixtures/v2.json` file. Validation checks the whole catalog regardless of execution mode. The previous `v1` assertion file is retained for historical evidence, not as an executable current fixture.
 
 Each tool-enabled scenario gets a separate in-memory SQLite database, fresh synthetic data, and a distinct session/run ID. Database fingerprints include every transaction field and category before and after the run. The query-failure scenario enables an interceptor only during that scenario's model/tool round; it does not damage the fixture or touch the interactive app's database.
 
