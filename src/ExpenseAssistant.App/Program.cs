@@ -55,7 +55,9 @@ string connectionString = builder.Configuration.GetConnectionString("Expenses")
 builder.Services.AddDbContext<ExpenseDbContext>(options => options.UseSqlite(connectionString));
 builder.Services.AddScoped<ITransactionQueries, TransactionQueries>();
 builder.Services.AddScoped<ITransactionSemanticSearch, TransactionSemanticSearch>();
-builder.Services.AddScoped<ExpenseTools>();
+builder.Services.AddScoped(provider => new ExpenseTools(
+    provider.GetRequiredService<ITransactionQueries>(),
+    () => provider.GetRequiredService<ITransactionSemanticSearch>()));
 
 builder.Services.AddSingleton(services =>
 {
