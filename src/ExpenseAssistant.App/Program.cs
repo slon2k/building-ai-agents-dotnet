@@ -54,6 +54,7 @@ string connectionString = builder.Configuration.GetConnectionString("Expenses")
 
 builder.Services.AddDbContext<ExpenseDbContext>(options => options.UseSqlite(connectionString));
 builder.Services.AddScoped<ITransactionQueries, TransactionQueries>();
+builder.Services.AddScoped<ITransactionSemanticSearch, TransactionSemanticSearch>();
 builder.Services.AddScoped<ExpenseTools>();
 
 builder.Services.AddSingleton(services =>
@@ -108,21 +109,9 @@ try
 	if (args.Contains("--index-only", StringComparer.OrdinalIgnoreCase))
 	{
 		await using AsyncServiceScope scope = host.Services.CreateAsyncScope();
-		AzureOpenAIOptions options = builder.Configuration.GetSection(AzureOpenAIOptions.SectionName)
-		    .Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
-		options.ValidateEmbeddings();
-		string indexId = builder.Configuration["EmbeddingIndex:IndexId"] ?? "expenses-v1";
-		string configurationVersion = builder.Configuration["EmbeddingIndex:ModelConfigurationVersion"] ?? "v1";
-		ArgumentException.ThrowIfNullOrWhiteSpace(configurationVersion);
-		string modelConfigurationId = System.Text.Json.JsonSerializer.Serialize(new
-		{
-		    Provider = "azure-openai",
-		    Endpoint = new Uri(options.Endpoint.TrimEnd('/') + "/").AbsoluteUri,
-		    Deployment = options.EmbeddingDeployment,
-		    Version = configurationVersion
-		});
+		EmbeddingIndexConfiguration index = scope.ServiceProvider.GetRequiredService<EmbeddingIndexConfiguration>();
 		IndexPopulationResult result = await scope.ServiceProvider.GetRequiredService<TransactionIndexPopulator>()
-		    .PopulateAsync(indexId, modelConfigurationId, stoppingToken);
+		    .PopulateAsync(index.IndexId, index.ModelConfigurationId, stoppingToken);
 		Console.WriteLine($"Index {result.IndexId}: generated {result.GeneratedCount}, reused {result.ReusedCount}, removed {result.RemovedCount}; dimensions {result.Dimensions}.");
 		return;
 	}

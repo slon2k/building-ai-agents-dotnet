@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using ExpenseAssistant.Core;
 using Microsoft.EntityFrameworkCore;
@@ -50,7 +48,7 @@ public sealed class TransactionIndexPopulator(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string text = source.BuildSearchableText;
-                string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+                string hash = source.SearchableTextHash;
                 string json;
                 if (compatible && stored.TryGetValue(source.Id, out TransactionEmbeddings? existing)
                     && existing.SearchableTextHash == hash)

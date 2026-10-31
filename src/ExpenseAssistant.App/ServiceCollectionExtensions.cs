@@ -21,6 +21,15 @@ public static class ServiceCollectionExtensions
             return new AzureOpenAIEmbeddings(options, provider.GetRequiredService<ILogger<AzureOpenAIEmbeddings>>());
         });
         services.AddScoped<TransactionIndexPopulator>();
+        services.AddSingleton(provider =>
+        {
+            IConfiguration config = provider.GetRequiredService<IConfiguration>();
+            AzureOpenAIOptions options = config.GetSection(AzureOpenAIOptions.SectionName)
+                .Get<AzureOpenAIOptions>() ?? new AzureOpenAIOptions();
+            return EmbeddingIndexConfiguration.Create(options,
+                config["EmbeddingIndex:IndexId"] ?? "expenses-v1",
+                config["EmbeddingIndex:ModelConfigurationVersion"] ?? "v1");
+        });
         return services;
     }
 

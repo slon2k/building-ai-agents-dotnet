@@ -124,6 +124,18 @@ Run the database tests with:
 dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~ExpenseDbContextTests
 ```
 
+### Semantic transaction search
+
+`ITransactionSemanticSearch.SearchAsync` returns a `SemanticSearchResult` with scored transaction candidates, the applied inclusive start/exclusive end/category filters, eligible count, requested limit, returned count, and `HasMore` (eligible records exceeded the limit, not proof of more relevant matches). Queries must be nonblank and at most 2,000 characters; limits are 1–100, default 5.
+
+`TransactionSemanticSearch` reads index metadata and all eligible transaction/vector pairs in one snapshot, without applying the exact-search result cap. It checks the shared model configuration identity, text-construction version, searchable-text hashes, vector validity and dimensions. Missing/stale embeddings or incompatible indexes fail explicitly; it never regenerates vectors. `DatasetVersion` is evaluation metadata, not a compatibility gate.
+
+For a valid index with no eligible records, search skips the embedding request. Otherwise it embeds the trimmed query, scores all eligible vectors with cosine similarity using double accumulators, and orders by descending score then ordinal transaction ID. Results include negative scores if they rank in top-k; no unevaluated similarity threshold is applied. Scores are not probabilities, and results are not exhaustive financial evidence. Diagnostics record index metadata, counts and timing but not query/transaction text or vectors. Search is registered in DI but is not yet exposed as an agent tool.
+
+```shell
+dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter FullyQualifiedName~TransactionSemanticSearchTests
+```
+
 ### Transaction queries
 
 Core defines `ITransactionQueries` and read-only result records; Infrastructure implements it with `TransactionQueries`. Both operations use an inclusive start date and exclusive end date, accept an optional exact category ID, and pass cancellation through to EF Core. Unknown or blank category IDs and invalid date ranges are rejected with argument exceptions.

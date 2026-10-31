@@ -110,30 +110,7 @@ public sealed class TransactionQueries : ITransactionQueries
             Array.AsReadOnly(categoryTotals));
     }
 
-    private async Task<IQueryable<Transaction>> CreateQueryAsync(
+    private Task<IQueryable<Transaction>> CreateQueryAsync(
         DateOnly startDate, DateOnly endDate, string? categoryId, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (endDate <= startDate)
-        {
-            throw new ArgumentException("The end date must be after the start date.", nameof(endDate));
-        }
-
-        IQueryable<Transaction> query = context.Transactions.AsNoTracking()
-            .Where(transaction => transaction.Date >= startDate && transaction.Date < endDate);
-
-        if (categoryId is not null)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(categoryId);
-            if (!await context.Categories.AnyAsync(category => category.Id == categoryId, cancellationToken))
-            {
-                throw new ArgumentException("The category ID is not recognized.", nameof(categoryId));
-            }
-
-            query = query.Where(transaction => transaction.CategoryId == categoryId);
-        }
-
-        return query;
-    }
+        => TransactionFilters.CreateQueryAsync(context, startDate, endDate, categoryId, cancellationToken);
 }
