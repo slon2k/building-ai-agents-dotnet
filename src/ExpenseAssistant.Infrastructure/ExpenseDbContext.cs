@@ -7,6 +7,8 @@ public sealed class ExpenseDbContext(DbContextOptions<ExpenseDbContext> options)
 {
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<Category> Categories => Set<Category>();
+    public DbSet<TransactionEmbeddings> TransactionEmbeddings => Set<TransactionEmbeddings>();
+    public DbSet<EmbeddingIndexMetadata> EmbeddingIndexMetadata => Set<EmbeddingIndexMetadata>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -33,6 +35,34 @@ public sealed class ExpenseDbContext(DbContextOptions<ExpenseDbContext> options)
                 .HasForeignKey(entity => entity.CategoryId)
                 .IsRequired()
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<EmbeddingIndexMetadata>(index =>
+        {
+            index.HasKey(entity => entity.IndexId);
+            index.Property(entity => entity.IndexId).ValueGeneratedNever();
+            index.Property(entity => entity.ModelConfigurationId).IsRequired();
+            index.Property(entity => entity.TextConstructionVersion).IsRequired();
+            index.Property(entity => entity.DatasetVersion).IsRequired();
+        });
+
+        modelBuilder.Entity<TransactionEmbeddings>(embedding =>
+        {
+            embedding.HasKey(entity => new { entity.IndexId, entity.TransactionId });
+            embedding.Property(entity => entity.SearchableTextHash).IsRequired();
+            embedding.Property(entity => entity.VectorJson).IsRequired();
+
+            embedding.HasOne<EmbeddingIndexMetadata>()
+                .WithMany()
+                .HasForeignKey(entity => entity.IndexId)
+                .IsRequired()
+                .OnDelete(DeleteBehavior.Cascade);
+
+            embedding.HasOne<Transaction>()
+                .WithMany()
+                .HasForeignKey(entity => entity.TransactionId)
+                .IsRequired()
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 

@@ -73,9 +73,13 @@ dotnet run --project src/ExpenseAssistant.App -- --seed-only
 
 Normal application startup also runs initialization. By default, `expense-assistant.db` is created beside the application output. Override the SQLite connection string through `ConnectionStrings:Expenses` in configuration or the `ConnectionStrings__Expenses` environment variable.
 
-The fixed synthetic fixture `v1` contains 123 transactions across January-June 2026 and eight categories. All expenses are positive EUR amounts, with no refunds or transfers. Amounts use `decimal` in application code and integer cents in SQLite; more than two decimal places are rejected. The March groceries fixture contains exactly `TX-G1` and `TX-G2`, totaling EUR 21.25; `TX-G3` is dated April 1 and is excluded from March.
+The fixed synthetic fixture `v2` contains 200 transactions across January-June 2026 and eight categories, with 83 distinct descriptions and plausible fixed prices. It includes 97 everyday expenses, 50 clear semantic candidates, 25 ambiguous purchases, 25 misleading word-overlap examples, and the three preserved groceries records. Recurring purchases reuse descriptions and prices across months. Concepts include desk/collaboration equipment, digital entertainment, leisure travel, client meetings, home maintenance, and exercise; the fixture design groups are not stored relevance labels or proof of purchase purpose. All expenses are positive EUR amounts, with no refunds or transfers. Amounts use `decimal` in application code and integer cents in SQLite; more than two decimal places are rejected. The March groceries fixture contains exactly `TX-G1` and `TX-G2`, totaling EUR 21.25; `TX-G3` is dated April 1 and is excluded from March. Semantic date-boundary examples are `TX-C001` (March 1), `TX-C002` (March 31), and `TX-C003` (April 1).
 
 Initialization inserts missing fixture IDs atomically and preserves existing records, including edited categories. It is not a reset command: use a fresh database for baseline evaluations and tests. The initializer uses `EnsureCreatedAsync`, not migrations; it does not upgrade an existing schema.
+
+`ExpenseDbContext` also maps `EmbeddingIndexMetadata` (key: `IndexId`) and `TransactionEmbeddings` (composite key: `IndexId`, `TransactionId`). Each vector belongs to an existing index and transaction; deleting either parent cascades to its dependent vectors, never from an index to transactions. Vectors are stored as JSON text; generation and vector-content validation are separate from these EF mappings. New databases include these tables, but existing databases require an explicit schema upgrade or a fresh database because `EnsureCreatedAsync` does not add them.
+
+The `v2` generated IDs use `TX-E`, `TX-C`, `TX-A`, and `TX-D` prefixes rather than reusing the old `TX-001`-style IDs. Initializing an existing complete `v1` database therefore retains its 120 older generated records and adds 197 new records (320 total), without overwriting descriptions or user edits. To obtain exactly the reviewed 200-record fixture, select a new SQLite database through `ConnectionStrings:Expenses`; preserve the previous database if its edits matter. The logged dataset version identifies the seed definition, not a guarantee that an existing database matches it.
 
 Run the database tests with:
 
@@ -186,7 +190,7 @@ If a running Windows console process locks Debug assemblies, add `--configuratio
 
 ### Evaluation scenarios
 
-`evals/scenarios.json` retains the four Module 1 scenario IDs in `model-only` mode and adds eight Module 2 scenarios in `tools` mode. The missing-transaction-data baselines still run without tools; their original expected behavior has not been reinterpreted. Tool scenarios declare `datasetVersion: "v1"`. Independent expected totals, counts, currency and record IDs live in `evals/fixtures/v1.json`.
+`evals/scenarios.json` retains the four Module 1 scenario IDs in `model-only` mode and adds eight Module 2 scenarios in `tools` mode. The missing-transaction-data baselines still run without tools; their original expected behavior has not been reinterpreted. Tool scenarios declare `datasetVersion: "v2"`. Independent expected totals, counts, currency and record IDs live in `evals/fixtures/v2.json`.
 
 Validate the entire catalog and verify the fixture assertions against freshly seeded SQLite, without credentials or model calls:
 
@@ -201,7 +205,7 @@ dotnet run --project src/ExpenseAssistant.Evals -- --mode tools
 dotnet run --project src/ExpenseAssistant.Evals -- --mode model-only
 ```
 
-Omitting `--mode` preserves the model-only default; `--mode all` explicitly selects both groups. An optional scenario-file path is supported; its fixture assertions are resolved from the adjacent `fixtures/v1.json` file. Validation checks the whole catalog regardless of execution mode.
+Omitting `--mode` preserves the model-only default; `--mode all` explicitly selects both groups. An optional scenario-file path is supported; its fixture assertions are resolved from the adjacent `fixtures/v2.json` file. Validation checks the whole catalog regardless of execution mode. The previous `v1` assertion file is retained for historical evidence, not as an executable current fixture.
 
 Each tool-enabled scenario gets a separate in-memory SQLite database, fresh synthetic data, and a distinct session/run ID. Database fingerprints include every transaction field and category before and after the run. The query-failure scenario enables an interceptor only during that scenario's model/tool round; it does not damage the fixture or touch the interactive app's database.
 
