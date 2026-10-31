@@ -356,3 +356,96 @@ Run and record Experiment A, retain the qualified review findings, and then clos
 - Agent-mode evaluation CLI scenarios with stable IDs and saved synthetic payload evidence are not yet implemented. The existing evaluation CLI still exercises earlier runners.
 - A controlled reduced-model-step-budget experiment, injected recoverable-failure live experiment, and controlled model/repetition comparison are not established by this single batch. Keep these limitations explicit before claiming every Module 3 experiment is complete; scripted budget/recovery tests already pass.
 - Course exercises and completion checklists were not changed by this evidence append.
+
+## Module 4 Checkpoint
+
+### Evidence and scope
+
+- Recorded on 2026-10-31 against revision `2ebb58b`. The working tree had a user configuration edit; its values, endpoint and credentials are not copied here.
+- Inspected the local [structured log](../src/ExpenseAssistant.App/bin/Debug/net10.0/logs/expense-assistant-20261031.jsonl), 301,426 bytes at discovery. SHA-256 at inspection: `9FA445F34810B8931E5E1B7681B06A9C2ECB892E23BB85859337CFAB5664A991`. Logs are Git-ignored, subject to retention, and may change after inspection.
+- This append records observed indexing and execution evidence, not completion of every Module 4 criterion. Normal logs omit prompts, filters, transaction/result payloads and final answers; they cannot establish relevance, exact filter values or answer correctness.
+- No application/model requests or tests were rerun for this documentation-only update.
+
+### Implemented
+
+- Reproducible searchable text from trimmed merchant and description; SHA-256 hashes detect stale entries.
+- Azure embedding generation separate from chat, with vector validation, cancellation, provider retries and usage logging.
+- EF Core migrations supporting fresh databases and adoption of the known earlier course schemas while preserving records.
+- Explicit `--index-only` population with hash-based reuse, compatibility checks and atomic publication.
+- Read-only local cosine-similarity search over all exactly eligible records, with stable transaction IDs, deterministic tie ordering and scored results.
+- Validated `SearchTransactionsByMeaning` tool alongside exact search and authoritative spending summaries; lazy semantic resolution preserves exact-only operation.
+- Retrieval timing, index metadata, counts and generic failure diagnostics. A labeled semantic evaluation set and keyword comparison are not yet implemented.
+
+### Index configuration
+
+- Provider/model deployment: Azure OpenAI, `text-embedding-3-small`; underlying provider model version is not independently recorded in these logs.
+- Vector dimensions: 1,536.
+- Embedded fields: merchant and description; dates, amounts and assigned categories remain structured metadata.
+- Text-construction version: `merchant-description-v1`.
+- Index ID: `expenses-v1`; model-configuration version: `v1`. Endpoint/deployment/version form the compatibility identity; the endpoint is intentionally omitted here.
+- Seed definition: `v2`. An earlier database contained 320 transactions (legacy records plus the new fixture); later indexing generated 200 vectors. The log does not identify database paths or prove every stored value matches the pristine fixture.
+
+### Live index population
+
+Times below are UTC+05:00 on 2026-10-31.
+
+| Completion time | Generated | Reused | Removed | Dimensions | Duration (s) |
+| --- | --- | --- | --- | --- | --- |
+| 15:09:21 | 320 | 0 | 0 | 1536 | 115.102 |
+| 17:16:49 | 200 | 0 | 0 | 1536 | 74.012 |
+| 17:19:54 | 0 | 200 | 0 | 1536 | 0.641 |
+
+- The final row verifies live reuse of 200 unchanged entries. Three completed population events and no failed/cancelled population events occur in this file.
+- The earlier assistant read-only inspection of the 320-record runtime database found SQLite integrity OK, no foreign-key violations, 320 covered transaction vectors, and zero invalid, stale or orphaned vectors. That inspection preceded the later 200-vector population and does not independently certify the later database.
+- The file contains 524 completed embedding-generation events: 520 indexing vectors and four semantic-query vectors. Their reported token counts sum to 5,909. This is logged usage, not a billed-cost calculation.
+
+### Observed agent runs
+
+The first session was `e45e8526-1e70-4946-969b-a5882629261e`; the later eight runs share session `760c3dc1-debc-40b4-aa79-31626ebd1d2a`. Later prompt-to-run mappings are not available from normal logs.
+
+| Run ID | Outcome | Model steps | Tool attempts | Duration (s) | Chat total tokens | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| `1cfabb21-99f5-4b77-b9e0-cdee478b7e7b` | Completed | 2 | 1 | 13.917 | 4545 | Semantic search; user supplied the remote-work/March transcript. |
+| `7ede62f4-8669-4417-ab32-ba66ef2332a2` | Completed | 2 | 1 | 11.292 | 4090 | Semantic search. |
+| `a83e252c-54d0-4e96-a817-88ecd3759330` | Completed | 2 | 1 | 8.449 | 3297 | Exact transaction search. |
+| `5f95486f-3f28-4d88-b35a-22e36ea92a3a` | Completed | 2 | 1 | 6.051 | 2958 | Spending summary. |
+| `011544e5-4c41-453d-8824-fc37bc70238a` | Completed | 1 | 0 | 8.831 | 2598 | Direct response; clarification quality cannot be inferred. |
+| `18e4c7d2-7a1e-4086-9edc-1d764597beb0` | BudgetExceeded | 1 | 7 | 9.426 | 2731 | Seven requested calls rejected as a batch; no tool execution. |
+| `6667c63d-374f-413b-99ba-446fbd22cb39` | BudgetExceeded | 4 | 4 | 16.123 | 6514 | Two exact searches completed; search and summary also returned `INVALID_CATEGORY`. |
+| `b6929df7-6d22-4035-aa93-b853afccc27c` | Completed | 2 | 1 | 15.181 | 5750 | Semantic search. |
+| `cc0873be-0122-4ee9-a40a-f06d574975aa` | Completed | 2 | 1 | 9.136 | 4269 | Semantic search. |
+
+- Seven runs completed and two stopped at `ToolCallLimit`; none ended with run outcome `Failed` or `Cancelled`. Budget settings were six model steps, four tool calls and 30 seconds.
+- Tool attempts include rejected/failed calls, not just successful executions. The seven-call batch was rejected without exceeding the execution cap.
+- `INVALID_CATEGORY` events demonstrate explicit failure reporting, but omitted arguments prevent diagnosing which category the model requested.
+
+### Part 7 retrieval diagnostics
+
+| Run ID | Eligible records | Requested / returned | Query embedding (ms) | Search total (ms) |
+| --- | --- | --- | --- | --- |
+| `1cfabb21-99f5-4b77-b9e0-cdee478b7e7b` | 62 | 5 / 5 | 287.137 | 742.434 |
+| `7ede62f4-8669-4417-ab32-ba66ef2332a2` | 42 | 5 / 5 | 332.736 | 556.707 |
+| `b6929df7-6d22-4035-aa93-b853afccc27c` | 76 | 6 / 6 | 384.172 | 466.320 |
+| `cc0873be-0122-4ee9-a40a-f06d574975aa` | 200 | 5 / 5 | 302.903 | 426.302 |
+
+- All four successful retrieval events include dimensions, index/model identity, text-construction version, counts and durations, correlated with session/run/tool-call IDs.
+- Query embedding tokens are logged separately from the agent's chat-token totals. Search duration includes embedding duration; these measurements must not be added as independent costs.
+- Inspected retrieval event property names contain no query/text/vector/credential payload fields. Normal logs do include the configured endpoint inside the model-configuration identity; raw logs should remain local and reviewed before sharing.
+- No semantic failure or cancellation event appears in this live batch. Those paths and metadata/content-exclusion assertions still require dedicated diagnostic verification; do not claim their live coverage.
+
+### Verification and answer review
+
+- Earlier assistant-run verification: `dotnet test tests\ExpenseAssistant.Tests\ExpenseAssistant.Tests.csproj --no-restore` passed 309 tests before semantic-tool integration.
+- After integration, the focused command with filter `FullyQualifiedName~SemanticExpenseToolsTests|FullyQualifiedName~ExpenseToolsTests|FullyQualifiedName~ToolDispatcherTests|FullyQualifiedName~ToolChatRunnerTests|FullyQualifiedName~AgentRunnerTests|FullyQualifiedName~EvaluationScenarioTests` passed 154 tests. No post-integration full-suite run or new evaluation-CLI validation is established by this log inspection.
+- Fixed-vector tests cover cosine calculations, exact filtering before ranking, limits/ties, incompatible/missing/stale vectors, provider failure, cancellation and no database mutations. Tool tests cover schemas, argument binding, safe failures and scripted agent integration.
+- User-supplied transcript for run `1cfabb21-99f5-4b77-b9e0-cdee478b7e7b`: presented five IDs, dates, amounts and scores, stated March boundaries, and initially qualified semantic relevance. It then overstated collaboration subscriptions as "clearly tied to remote-work" and offered a category summary to "quantify remote-work costs". These are failed uncertainty/aggregation-boundary review points, not evidence of a correct inferred total.
+- Heating and client-meeting train tickets were weak/ambiguous candidates. March monitor/laptop-stand records `TX-C001` and `TX-C002` were absent from the top five; inspect their direct scores before concluding whether model ranking or an implementation defect is responsible.
+- No final-answer transcript is available for the later runs; their successful outcomes do not establish correct tool selection for particular questions, filters, relevance or grounded wording.
+
+### Remaining evaluation and handoff
+
+- Labeled query IDs/set version, precision@k, recall@k, hit rate@k, keyword baseline, held-out evaluation, embedded-field comparison and absent-concept experiment: pending.
+- Final-answer reviews must be saved separately from retrieval metrics and linked here. The historical evaluation CLI still uses the exact-tool baseline, not semantic agent scenarios.
+- Reasoning checks: equal dimensions do not establish shared model semantics; use exact tools for stored constraints and authoritative totals; retrieval metrics measure reviewed evidence selection, while answer reviews measure grounding and interpretation.
+- Time spent: not independently tracked; indexing/search durations above are operation timings, not learner effort.
+- Next: inspect weak/missing remote-work candidates, establish the labeled retrieval harness and keyword baseline, refine and verify answer boundaries, and record the remaining experiments. Module 4 is not yet fully complete; proceed to Module 5 only after closing or explicitly documenting these remaining criteria.

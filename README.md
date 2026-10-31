@@ -241,6 +241,28 @@ dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --filter 
 
 If a running Windows console process locks Debug assemblies, add `--configuration Release` to the test command instead of stopping that session.
 
+### Module 4 retrieval scenarios
+
+Validate the draft retrieval catalog without model calls:
+
+```shell
+dotnet run --project src/ExpenseAssistant.Evals -- --retrieval --validate
+```
+
+Run paid embedding evaluations (no chat requests):
+
+```shell
+dotnet run --project src/ExpenseAssistant.Evals -- --retrieval
+```
+
+`evals/retrieval.json` contains 12 candidate query/label sets, split into tuning and held-out cases. All labels start as `draft`; review every eligible fixture record, update relevant/ambiguous IDs and notes, then set `reviewStatus` to `reviewed`. Set `relevantSetComplete` to true only after sufficiently reviewing the full relevant set. Increment `labelVersion` when labels change. Draft precision/recall/hit-rate values are null, not reported as verified metrics. Ambiguous IDs count as non-relevant unless relabeled; absent-concept queries have undefined metrics and must be reviewed via returned false positives. Held-out rows are tagged separately; do not tune against them repeatedly.
+
+The runner uses its own `evals/results/retrieval-cache.db`, ignores the application's transaction connection string, and checks cached transactions against a freshly seeded fixture fingerprint. It reuses compatible transaction embeddings on later runs; the first run normally generates 200 stored vectors. It queries semantic search once per scenario at limit 100 and derives top-3/5/10 results from that ranking, retaining top-100 diagnostic rows for missing-candidate inspection. The empty-period case makes no query-embedding request. The keyword baseline counts distinct ASCII alphanumeric query tokens found in merchant/description text, excludes zero-token matches, applies identical exact filters, and breaks ties by ordinal ID. Scores between methods are not comparable.
+
+Reports in `evals/results/retrieval-*.json` include scenario definitions, label/catalog/dataset hashes, model deployment/configuration version, index metadata, population counts, candidate facts/scores, per-k metrics and explicit failure status. They intentionally capture synthetic evaluation payloads; never use this runner for personal transaction data. No universal quality threshold is imposed. Failed scenarios return exit code 1; invalid catalogs return 2; Ctrl+C cancels. An optional catalog path is supported, with cache/reports in its adjacent `results` directory. A mismatched cache is rejected rather than overwritten: preserve it and select a new catalog directory for a fresh run.
+
+These are retrieval-only scenarios, not agent tool-selection or final-answer evaluations. Embedded-field variants and end-to-end chat review remain separate experiments. `--mode` belongs to the historical runner, not `--retrieval`.
+
 ### Evaluation scenarios
 
 `evals/scenarios.json` retains the four Module 1 scenario IDs in `model-only` mode and adds eight Module 2 scenarios in `tools` mode. The missing-transaction-data baselines still run without tools; their original expected behavior has not been reinterpreted. Tool scenarios declare `datasetVersion: "v2"`. Independent expected totals, counts, currency and record IDs live in `evals/fixtures/v2.json`.
