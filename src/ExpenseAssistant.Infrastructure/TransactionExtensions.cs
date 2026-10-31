@@ -4,6 +4,8 @@ namespace ExpenseAssistant.Infrastructure;
 
 public static class TransactionExtensions
 {
+    public const string TextConstructionVersion = "merchant-description-v1";
+
     extension (Transaction transaction)
     {
         public string BuildSearchableText => 

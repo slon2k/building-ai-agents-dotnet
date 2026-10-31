@@ -10,7 +10,7 @@ public static class ExpenseDatabaseInitializer
 
     public static async Task InitializeAsync(ExpenseDbContext context, CancellationToken cancellationToken = default)
     {
-        await context.Database.EnsureCreatedAsync(cancellationToken);
+        await context.Database.MigrateAsync(cancellationToken);
         await using var databaseTransaction = await context.Database.BeginTransactionAsync(cancellationToken);
 
         var existingCategoryIds = (await context.Categories

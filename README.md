@@ -63,6 +63,32 @@ The console app uses the .NET Generic Host and dependency injection. Configurati
 
 Host shutdown cancellation flows to console input and active chat requests. During a run, the Esc polling delay is not itself cancelled by host shutdown: the active run must finish cancellation/cleanup before its scope is disposed. EF Core logging is limited to warnings and errors to avoid logging SQL and transaction payloads by default.
 
+### Embedding generation
+
+Core's `IEmbeddings.GenerateAsync` generates one numeric vector from text; Infrastructure's `AzureOpenAIEmbeddings` wraps `IEmbeddingGenerator<string, Embedding<float>>` using the OpenAI-compatible Azure v1 endpoint. Configure `AzureOpenAI:EmbeddingDeployment` separately from the chat `Deployment`, sharing `Endpoint` and `ApiKey`. For example, set a deployed embedding-model name through User Secrets:
+
+```shell
+dotnet user-secrets set "AzureOpenAI:EmbeddingDeployment" "<embedding-deployment-name>" --project src/ExpenseAssistant.App
+```
+
+The environment variable equivalent is `AzureOpenAI__EmbeddingDeployment`; credentials use `AzureOpenAI__ApiKey`. Registration is lazy, so seeding and chat do not require embedding configuration, and generating embeddings does not require a chat deployment. Provider errors and cancellation propagate; empty, zero-magnitude, and non-finite vectors are rejected. Logs contain timing, dimensions and available token usage, not input text or vectors. The returned vector length gives its actual dimensions; callers must enforce index/model compatibility. A deployment name alone does not pin an underlying model version.
+
+### Populate the embedding index
+
+After deploying an embedding model and configuring its deployment name, run:
+
+```shell
+dotnet run --project src/ExpenseAssistant.App -- --index-only
+```
+
+This command migrates the database, inserts missing synthetic transactions, then populates both embedding tables and exits without resolving the chat model. It makes paid embedding requests for new or changed searchable text. On an unchanged second run it reuses all vectors and makes no embedding requests. A fresh fixture generates 200 vectors; an older or edited database may contain more records.
+
+`EmbeddingIndex:IndexId` defaults to `expenses-v1`. Model compatibility is identified by the Azure endpoint, embedding deployment, and `EmbeddingIndex:ModelConfigurationVersion` (default `v1`). Increment the configuration version whenever the deployment's underlying model/version changes, even if its name and dimensions remain the same. A changed model configuration or `TransactionExtensions.TextConstructionVersion` rebuilds all vectors for that index. Changing only dates, amounts, or categories does not regenerate vectors because only trimmed merchant and description are embedded.
+
+The populator stores SHA-256 searchable-text hashes and JSON vectors, verifies consistent dimensions, and atomically commits entries plus index metadata. It holds a SQLite transaction while generating vectors to keep the source snapshot stable; run this maintenance command without concurrent writes. Provider failure or cancellation leaves the previous index intact. Corrupt stored vectors fail explicitly; rebuild using a new configuration version after investigating the error. A new empty dataset cannot establish dimensions and is rejected; an existing compatible index can be emptied. Deleting transactions cascades to embeddings immediately, so already-cascaded deletions are not included in the command's removed count.
+
+`--seed-only` and `--index-only` are mutually exclusive. Index population is not exposed as an agent tool; ordinary chat does not populate vectors.
+
 ### Seed the local database
 
 Initialize SQLite without model credentials or a model request:
@@ -75,9 +101,20 @@ Normal application startup also runs initialization. By default, `expense-assist
 
 The fixed synthetic fixture `v2` contains 200 transactions across January-June 2026 and eight categories, with 83 distinct descriptions and plausible fixed prices. It includes 97 everyday expenses, 50 clear semantic candidates, 25 ambiguous purchases, 25 misleading word-overlap examples, and the three preserved groceries records. Recurring purchases reuse descriptions and prices across months. Concepts include desk/collaboration equipment, digital entertainment, leisure travel, client meetings, home maintenance, and exercise; the fixture design groups are not stored relevance labels or proof of purchase purpose. All expenses are positive EUR amounts, with no refunds or transfers. Amounts use `decimal` in application code and integer cents in SQLite; more than two decimal places are rejected. The March groceries fixture contains exactly `TX-G1` and `TX-G2`, totaling EUR 21.25; `TX-G3` is dated April 1 and is excluded from March. Semantic date-boundary examples are `TX-C001` (March 1), `TX-C002` (March 31), and `TX-C003` (April 1).
 
-Initialization inserts missing fixture IDs atomically and preserves existing records, including edited categories. It is not a reset command: use a fresh database for baseline evaluations and tests. The initializer uses `EnsureCreatedAsync`, not migrations; it does not upgrade an existing schema.
+Initialization applies EF Core migrations, then inserts missing fixture IDs atomically and preserves existing records, including edited categories. It is not a reset command: use a fresh database for baseline evaluations and tests. Back up existing databases before applying migrations.
 
-`ExpenseDbContext` also maps `EmbeddingIndexMetadata` (key: `IndexId`) and `TransactionEmbeddings` (composite key: `IndexId`, `TransactionId`). Each vector belongs to an existing index and transaction; deleting either parent cascades to its dependent vectors, never from an index to transactions. Vectors are stored as JSON text; generation and vector-content validation are separate from these EF mappings. New databases include these tables, but existing databases require an explicit schema upgrade or a fresh database because `EnsureCreatedAsync` does not add them.
+`ExpenseDbContext` also maps `EmbeddingIndexMetadata` (key: `IndexId`) and `TransactionEmbeddings` (composite key: `IndexId`, `TransactionId`). Each vector belongs to an existing index and transaction; deleting either parent cascades to its dependent vectors, never from an index to transactions. Vectors are stored as JSON text; generation and vector-content validation are separate from these EF mappings.
+
+The initial migration creates missing tables/indexes with `IF NOT EXISTS`, supporting the course's original `EnsureCreated` transaction schema and its later schema with embedding tables. Existing tables and records are retained, and EF records the migration in its history. This adoption is only for these known course schemas, not arbitrary manually modified databases; existing table definitions are not repaired. The initial migration cannot be rolled back by dropping tables because they may predate migrations; restore a backup instead.
+
+The repository-local `dotnet-ef` tool and design-time context factory support future migrations without chat credentials:
+
+```shell
+dotnet tool restore
+dotnet ef migrations add <MigrationName> --project src/ExpenseAssistant.Infrastructure
+```
+
+Normal startup applies pending migrations to the configured application database. To apply them explicitly with `dotnet ef database update --project src/ExpenseAssistant.Infrastructure`, set `ConnectionStrings__Expenses` to the intended SQLite connection string first. The design-time default is `expense-assistant.db` in the working directory, whereas the runtime default is beside the application output.
 
 The `v2` generated IDs use `TX-E`, `TX-C`, `TX-A`, and `TX-D` prefixes rather than reusing the old `TX-001`-style IDs. Initializing an existing complete `v1` database therefore retains its 120 older generated records and adds 197 new records (320 total), without overwriting descriptions or user edits. To obtain exactly the reviewed 200-record fixture, select a new SQLite database through `ConnectionStrings:Expenses`; preserve the previous database if its edits matter. The logged dataset version identifies the seed definition, not a guarantee that an existing database matches it.
 
