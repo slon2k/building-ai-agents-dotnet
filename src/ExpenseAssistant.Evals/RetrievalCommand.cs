@@ -31,9 +31,8 @@ public static class RetrievalCommand
         };
         try
         {
-            RetrievalCatalog catalog = JsonSerializer.Deserialize<RetrievalCatalog>(
-                await File.ReadAllTextAsync(path, cancellation.Token), json)
-                ?? throw new InvalidDataException("Retrieval catalog is null.");
+            RetrievalCatalogSnapshot snapshot = await RetrievalCatalogSnapshot.LoadAsync(path, json, cancellation.Token);
+            RetrievalCatalog catalog = snapshot.Catalog;
             await using var pristine = new ExpenseDbContext(new DbContextOptionsBuilder<ExpenseDbContext>()
                 .UseSqlite("Data Source=:memory:;Foreign Keys=True").Options);
             await pristine.Database.OpenConnectionAsync(cancellation.Token);
@@ -77,7 +76,7 @@ public static class RetrievalCommand
             {
                 RunId = Guid.NewGuid(), CreatedAt = DateTimeOffset.UtcNow, catalog.DatasetVersion, catalog.LabelVersion,
                 DatasetFingerprint = fingerprint,
-                CatalogHash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(path, cancellation.Token))),
+                CatalogHash = snapshot.Hash,
                 EmbeddingDeployment = options.EmbeddingDeployment,
                 ModelConfigurationVersion = config["EmbeddingIndex:ModelConfigurationVersion"] ?? "v1",
                 index.IndexId, TransactionExtensions.TextConstructionVersion, population.Dimensions,
@@ -99,9 +98,9 @@ public static class RetrievalCommand
             Console.Error.WriteLine($"Retrieval input error: {exception.Message}");
             return 2;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            Console.Error.WriteLine("Retrieval evaluation failed. Check embedding configuration, provider access and database availability.");
+            Console.Error.WriteLine($"Retrieval evaluation failed ({RetrievalFailure.Classify(exception)}). Check embedding configuration, provider access and database availability.");
             return 1;
         }
         finally { Console.CancelKeyPress -= handler; }

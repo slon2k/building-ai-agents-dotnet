@@ -62,7 +62,7 @@ public sealed class RetrievalEvaluator(ITransactionSemanticSearch search)
                 semantic = result.Candidates;
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception) { error = "RETRIEVAL_FAILED"; }
+            catch (Exception exception) { error = RetrievalFailure.Classify(exception); }
             int eligible = transactions.Count(scenario.IsEligible);
             foreach (int k in new[] { 3, 5, 10 })
             {

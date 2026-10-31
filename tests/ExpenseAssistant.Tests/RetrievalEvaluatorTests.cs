@@ -60,12 +60,86 @@ public class RetrievalEvaluatorTests
         Assert.All(rows.Where(r => r.Method.StartsWith("semantic")), r =>
         {
             Assert.Equal("Failed", r.Status);
-            Assert.Equal("RETRIEVAL_FAILED", r.ErrorCode);
+            Assert.Equal("INDEX_OR_CONFIGURATION_FAILED", r.ErrorCode);
             Assert.Null(r.Metrics.Precision);
         });
         fake.Failure = new OperationCanceledException();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             new RetrievalEvaluator(fake).RunAsync(Catalog(), [Source("A", "monitor")], default));
+    }
+
+    [Theory]
+    [InlineData("network", "PROVIDER_CONNECTION_FAILED")]
+    [InlineData("database", "DATABASE_FAILED")]
+    [InlineData("json", "INVALID_VECTOR_JSON")]
+    [InlineData("arguments", "INVALID_SEARCH_ARGUMENTS")]
+    [InlineData("unknown", "RETRIEVAL_FAILED")]
+    public async Task Runner_ClassifiesFailuresWithoutExposingExceptionMessages(string kind, string expected)
+    {
+        const string message = "PRIVATE_PROVIDER_OR_DATABASE_DETAILS";
+        Exception failure = kind switch
+        {
+            "network" => new HttpRequestException(message),
+            "database" => new Microsoft.Data.Sqlite.SqliteException(message, 1),
+            "json" => new System.Text.Json.JsonException(message),
+            "arguments" => new ArgumentException(message),
+            _ => new Exception(message)
+        };
+        var rows = await new RetrievalEvaluator(new Search { Failure = failure })
+            .RunAsync(Catalog(), [Source("A", "monitor")], default);
+
+        Assert.All(rows.Where(row => row.Method.StartsWith("semantic")), row =>
+        {
+            Assert.Equal("Failed", row.Status);
+            Assert.Equal(expected, row.ErrorCode);
+            Assert.Null(row.Metrics.Precision);
+        });
+        Assert.DoesNotContain(message, System.Text.Json.JsonSerializer.Serialize(rows));
+        Assert.All(rows.Where(row => row.Method == "keyword"), row => Assert.Equal("Completed", row.Status));
+    }
+
+    [Fact]
+    public async Task Runner_ClassifiesProviderHttpFailureWithoutExposingResponse()
+    {
+        using var handler = new ProviderFailureHandler();
+        using var http = new HttpClient(handler);
+        var client = new OpenAI.Embeddings.EmbeddingClient("fake-model",
+            new System.ClientModel.ApiKeyCredential("test-only-key"),
+            new OpenAI.OpenAIClientOptions
+            {
+                Endpoint = new Uri("https://expense-assistant.invalid"),
+                Transport = new System.ClientModel.Primitives.HttpClientPipelineTransport(http)
+            });
+        var failure = await Assert.ThrowsAsync<System.ClientModel.ClientResultException>(
+            async () => await client.GenerateEmbeddingAsync("monitor"));
+        var rows = await new RetrievalEvaluator(new Search { Failure = failure })
+            .RunAsync(Catalog(), [Source("A", "monitor")], default);
+
+        Assert.All(rows.Where(row => row.Method.StartsWith("semantic")),
+            row => Assert.Equal("PROVIDER_HTTP_401", row.ErrorCode));
+        Assert.DoesNotContain("PRIVATE_PROVIDER_DETAILS", System.Text.Json.JsonSerializer.Serialize(rows));
+    }
+
+    [Fact]
+    public async Task CatalogSnapshot_HashIdentifiesLoadedBytesDespiteLaterFileEdit()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"retrieval-snapshot-{Guid.NewGuid():N}.json");
+        byte[] original = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(Catalog());
+        try
+        {
+            await File.WriteAllBytesAsync(path, original);
+            var snapshot = await RetrievalCatalogSnapshot.LoadAsync(path, new System.Text.Json.JsonSerializerOptions());
+            await File.WriteAllTextAsync(path, "{}");
+
+            Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(original)), snapshot.Hash);
+            Assert.Equal("monitor", Assert.Single(snapshot.Catalog.Scenarios).Id);
+            Assert.NotEqual(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                await File.ReadAllBytesAsync(path))), snapshot.Hash);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]
@@ -97,6 +171,17 @@ public class RetrievalEvaluatorTests
     };
     private static SemanticSearchCandidate Candidate(string id) => new(
         new TransactionDto(id, new DateOnly(2026, 3, 1), "Store", "monitor", "shopping", "Shopping", 10m, "EUR"), 1);
+
+    private sealed class ProviderFailureHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+            {
+                Content = new StringContent(
+                    """{"error":{"message":"PRIVATE_PROVIDER_DETAILS","type":"invalid_request_error","code":"invalid_api_key"}}""",
+                    System.Text.Encoding.UTF8, "application/json")
+            });
+    }
 
     private sealed class Search : ITransactionSemanticSearch
     {

@@ -263,6 +263,8 @@ Reports in `evals/results/retrieval-*.json` include scenario definitions, label/
 
 These are retrieval-only scenarios, not agent tool-selection or final-answer evaluations. Embedded-field variants and end-to-end chat review remain separate experiments. `--mode` belongs to the historical runner, not `--retrieval`.
 
+Catalog hashes identify the exact bytes loaded before execution, even if the file is edited during a run. Failed semantic rows retain safe classifications for provider HTTP status, connection failures, database failures, invalid vector JSON, invalid arguments, or index/configuration failures; raw exception messages are not included. The index/configuration category is deliberately broad because the search service does not yet expose typed failure reasons. Unexpected failures remain `RETRIEVAL_FAILED`, never successful empty results.
+
 ### Evaluation scenarios
 
 `evals/scenarios.json` retains the four Module 1 scenario IDs in `model-only` mode and adds eight Module 2 scenarios in `tools` mode. The missing-transaction-data baselines still run without tools; their original expected behavior has not been reinterpreted. Tool scenarios declare `datasetVersion: "v2"`. Independent expected totals, counts, currency and record IDs live in `evals/fixtures/v2.json`.
