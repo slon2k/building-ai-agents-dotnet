@@ -6,7 +6,7 @@ This repository starts as a personal training project. The materials are organiz
 
 ## Current status
 
-The seven course modules are available. Application code, a runnable starter solution and CI are not included yet. SDK/package compatibility and the course time estimates have not been validated through an implementation or learner pilot.
+The seven course modules are available. Application code, a runnable starter solution and CI are not included yet. Module 5 is estimated at 10–14 hours because it includes persistence, safe run recovery, context budgeting, summarization and evaluation. SDK/package compatibility and all course time estimates remain provisional and have not been validated through an implementation or learner pilot.
 
 ## What you will build
 

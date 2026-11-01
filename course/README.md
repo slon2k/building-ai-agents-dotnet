@@ -18,11 +18,11 @@ Complete the modules in order. Each extends the previous module's working applic
 | [2. Tools and transaction data](module_02.md) | Validated read-only tools and deterministic financial calculations | 3-4 hours |
 | [3. The agent loop](module_03.md) | Bounded multi-step execution with explicit outcomes | 3-4 hours |
 | [4. Retrieval and embeddings](module_04.md) | Semantic search compared with an exact-search baseline | 3-4 hours |
-| [5. Sessions and context](module_05.md) | Persistent conversations, isolation and controlled history compaction | 3-5 hours |
+| [5. Sessions and context](module_05.md) | Persistent conversations, isolation and controlled history compaction | 10-14 hours |
 | [6. Safe actions](module_06.md) | Approval-gated changes with revalidation and an audit trail | 3-5 hours |
 | [7. Evaluation and review](module_07.md) | Repeatable evaluations and a baseline-versus-candidate comparison | 3-5 hours |
 
-The estimates total 20-30 hours and have not been validated through a learner pilot. Allow additional time for setup, unfamiliar concepts, debugging and review. Modules 5 and 6 have staged labs that can be completed in separate sessions. Record actual time before revising these estimates.
+The estimates total 27-39 hours and have not been validated through a learner pilot. Allow additional time for setup, unfamiliar concepts, debugging and review. Modules 5 and 6 have staged labs that can be completed in separate sessions. Record actual time before revising these estimates.
 
 ## Environment and scope
 

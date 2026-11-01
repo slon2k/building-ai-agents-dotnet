@@ -12,7 +12,7 @@ We will separate stored conversation history from the context sent to the model,
 
 ## Module overview
 
-**Estimated effort:** 3–5 hours, split across sessions if needed.
+**Estimated effort:** 10–14 hours, split across sessions if needed. This estimate includes implementation, deterministic tests, experiments and checkpoint evidence; setup and time spent resolving unfamiliar concepts may add more.
 
 **Main question:**
 
@@ -139,11 +139,11 @@ This is a **single-user, multiple-session application** for now. Session isolati
 
 Complete these stages in order. Each is a stopping point for a separate study session, not permission to skip the remaining safety requirements.
 
-| Lab | Parts | Gate before continuing |
-| --- | --- | --- |
-| A. Persist and resume | 1-3 | Restart with two sessions; verify isolated history and safe handling of an unfinished run |
-| B. Assemble and compact context | 4-7 | With fake summaries and a small budget, verify coverage, no duplication and intact tool exchanges |
-| C. Revalidate current facts | 8, then tests and experiments | Change a shared transaction, resume an older session and verify that a current-state question uses fresh data |
+| Lab | Parts | Estimated effort | Gate before continuing |
+| --- | --- | --- | --- |
+| A. Persist and resume | 1-3 | 3–4 hours | Restart with two sessions; verify isolated history and safe handling of an unfinished run |
+| B. Assemble and compact context | 4-7 | 4–6 hours | With fake summaries and a small budget, verify coverage, no duplication and intact tool exchanges |
+| C. Revalidate current facts | 8, then tests and experiments | 3–4 hours | Change a shared transaction, resume an older session and verify that a current-state question uses fresh data |
 
 Save test results and one diagnostic artifact at each gate. Run all prior deterministic tests after integrating each stage.
 
