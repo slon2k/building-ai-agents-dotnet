@@ -31,6 +31,179 @@ namespace ExpenseAssistant.Infrastructure.Migrations
                     b.ToTable("Categories");
                 });
 
+            modelBuilder.Entity("ExpenseAssistant.Core.ConversationMessage", b =>
+                {
+                    b.Property<Guid>("MessageId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("RunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("SequenceNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("MessageId");
+
+                    b.HasIndex("SessionId", "RunId");
+
+                    b.HasIndex("SessionId", "SequenceNumber")
+                        .IsUnique();
+
+                    b.ToTable("ConversationMessages", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_ConversationMessages_SequenceNumber", "\"SequenceNumber\" > 0");
+                        });
+                });
+
+            modelBuilder.Entity("ExpenseAssistant.Core.ConversationMessagePart", b =>
+                {
+                    b.Property<Guid>("MessageId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Ordinal")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ArgumentsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CallId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Text")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ToolName")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("MessageId", "Ordinal");
+
+                    b.ToTable("ConversationMessageParts", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_ConversationMessageParts_KindFields", "(\"Kind\" = 'Text' AND \"Ordinal\" >= 0 AND \"Text\" IS NOT NULL AND \"CallId\" IS NULL AND \"ToolName\" IS NULL AND \"ArgumentsJson\" IS NULL AND \"ResultJson\" IS NULL) OR (\"Kind\" = 'ToolCall' AND \"Ordinal\" >= 0 AND \"Text\" IS NULL AND \"CallId\" IS NOT NULL AND length(trim(\"CallId\")) > 0 AND \"ToolName\" IS NOT NULL AND length(trim(\"ToolName\")) > 0 AND \"ArgumentsJson\" IS NOT NULL AND \"ResultJson\" IS NULL) OR (\"Kind\" = 'ToolResult' AND \"Ordinal\" >= 0 AND \"Text\" IS NULL AND \"CallId\" IS NOT NULL AND length(trim(\"CallId\")) > 0 AND \"ToolName\" IS NULL AND \"ArgumentsJson\" IS NULL AND \"ResultJson\" IS NOT NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("ExpenseAssistant.Core.Session", b =>
+                {
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("LastActivityAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("SessionId");
+
+                    b.ToTable("Sessions");
+                });
+
+            modelBuilder.Entity("ExpenseAssistant.Core.SessionRun", b =>
+                {
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("InputTokenCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ModelStepCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("OutputTokenCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("StopReason")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ToolCallCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("TotalTokenCount")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("RunId");
+
+                    b.HasIndex("SessionId")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 'Running'");
+
+                    b.ToTable("SessionRuns", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_SessionRuns_NonNegativeCounters", "\"ModelStepCount\" >= 0 AND \"ToolCallCount\" >= 0 AND (\"InputTokenCount\" IS NULL OR \"InputTokenCount\" >= 0) AND (\"OutputTokenCount\" IS NULL OR \"OutputTokenCount\" >= 0) AND (\"TotalTokenCount\" IS NULL OR \"TotalTokenCount\" >= 0)");
+
+                            t.HasCheckConstraint("CK_SessionRuns_StatusEndTime", "(\"Status\" = 'Running' AND \"EndedAt\" IS NULL) OR (\"Status\" <> 'Running' AND \"EndedAt\" IS NOT NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("ExpenseAssistant.Core.SessionSummary", b =>
+                {
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CoveredThroughSequenceNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ModelId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PromptVersion")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SummaryText")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("SessionId");
+
+                    b.ToTable("SessionSummaries", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_SessionSummaries_Coverage", "\"CoveredThroughSequenceNumber\" >= 0");
+
+                            t.HasCheckConstraint("CK_SessionSummaries_Version", "\"Version\" > 0");
+                        });
+                });
+
             modelBuilder.Entity("ExpenseAssistant.Core.Transaction", b =>
                 {
                     b.Property<string>("Id")
@@ -114,6 +287,48 @@ namespace ExpenseAssistant.Infrastructure.Migrations
                     b.ToTable("TransactionEmbeddings");
                 });
 
+            modelBuilder.Entity("ExpenseAssistant.Core.ConversationMessage", b =>
+                {
+                    b.HasOne("ExpenseAssistant.Core.Session", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ExpenseAssistant.Core.SessionRun", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId", "RunId")
+                        .HasPrincipalKey("SessionId", "RunId")
+                        .OnDelete(DeleteBehavior.Cascade);
+                });
+
+            modelBuilder.Entity("ExpenseAssistant.Core.ConversationMessagePart", b =>
+                {
+                    b.HasOne("ExpenseAssistant.Core.ConversationMessage", null)
+                        .WithMany("Parts")
+                        .HasForeignKey("MessageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ExpenseAssistant.Core.SessionRun", b =>
+                {
+                    b.HasOne("ExpenseAssistant.Core.Session", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ExpenseAssistant.Core.SessionSummary", b =>
+                {
+                    b.HasOne("ExpenseAssistant.Core.Session", null)
+                        .WithOne()
+                        .HasForeignKey("ExpenseAssistant.Core.SessionSummary", "SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("ExpenseAssistant.Core.Transaction", b =>
                 {
                     b.HasOne("ExpenseAssistant.Core.Category", "Category")
@@ -138,6 +353,11 @@ namespace ExpenseAssistant.Infrastructure.Migrations
                         .HasForeignKey("TransactionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("ExpenseAssistant.Core.ConversationMessage", b =>
+                {
+                    b.Navigation("Parts");
                 });
 #pragma warning restore 612, 618
         }

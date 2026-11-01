@@ -302,6 +302,13 @@ public class ExpenseDbContextTests
         if (createSchema)
         {
             context.Database.EnsureCreated();
+            context.Database.ExecuteSqlRaw("""
+                DROP TABLE ConversationMessageParts;
+                DROP TABLE ConversationMessages;
+                DROP TABLE SessionSummaries;
+                DROP TABLE SessionRuns;
+                DROP TABLE Sessions;
+                """);
         }
         return context;
     }

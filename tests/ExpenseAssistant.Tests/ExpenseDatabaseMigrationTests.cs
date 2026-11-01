@@ -33,6 +33,13 @@ public class ExpenseDatabaseMigrationTests
         }
         await context.SaveChangesAsync();
         context.ChangeTracker.Clear();
+        await context.Database.ExecuteSqlRawAsync("""
+            DROP TABLE ConversationMessageParts;
+            DROP TABLE ConversationMessages;
+            DROP TABLE SessionSummaries;
+            DROP TABLE SessionRuns;
+            DROP TABLE Sessions;
+            """);
         if (!hasEmbeddings)
         {
             await context.Database.ExecuteSqlRawAsync("DROP TABLE TransactionEmbeddings; DROP TABLE EmbeddingIndexMetadata;");
@@ -41,7 +48,7 @@ public class ExpenseDatabaseMigrationTests
         await ExpenseDatabaseInitializer.InitializeAsync(context);
         await ExpenseDatabaseInitializer.InitializeAsync(context);
 
-        Assert.Single(await context.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(2, (await context.Database.GetAppliedMigrationsAsync()).Count());
         Assert.Empty(await context.Database.GetPendingMigrationsAsync());
         Assert.Equal(201, await context.Transactions.CountAsync());
         Assert.Equal("Preserved purchase", (await context.Transactions.SingleAsync(entity => entity.Id == "CUSTOM-1")).Description);
@@ -58,7 +65,7 @@ public class ExpenseDatabaseMigrationTests
 
         await ExpenseDatabaseInitializer.InitializeAsync(context);
 
-        Assert.Single(await context.Database.GetAppliedMigrationsAsync());
+        Assert.Equal(2, (await context.Database.GetAppliedMigrationsAsync()).Count());
         Assert.Equal(200, await context.Transactions.CountAsync());
         Assert.Empty(await context.TransactionEmbeddings.ToListAsync());
         Assert.Empty(await context.EmbeddingIndexMetadata.ToListAsync());
