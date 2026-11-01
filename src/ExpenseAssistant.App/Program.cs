@@ -79,6 +79,7 @@ builder.Services.AddSingleton(services =>
 
 builder.Services.AddChatClient();
 builder.Services.AddEmbeddings();
+builder.Services.AddSessionPersistence();
 builder.Services.AddAgentRunner();
 builder.Services.AddToolChatRunner();
 builder.Services.AddSingleton<ConsoleChat>();
@@ -100,6 +101,13 @@ try
 		await ExpenseDatabaseInitializer.InitializeAsync(context, stoppingToken);
 		host.Services.GetRequiredService<ILogger<Program>>()
 			.LogInformation("Database initialization completed DatasetVersion={DatasetVersion}", ExpenseDatabaseInitializer.DatasetVersion);
+	}
+	await using (AsyncServiceScope scope = host.Services.CreateAsyncScope())
+	{
+		int interruptedRuns = await scope.ServiceProvider.GetRequiredService<ISessionStore>()
+			.RecoverInterruptedRunsAsync(DateTimeOffset.UtcNow, stoppingToken);
+		host.Services.GetRequiredService<ILogger<Program>>()
+			.LogInformation("Session recovery completed InterruptedRuns={InterruptedRuns}", interruptedRuns);
 	}
 
 	if (args.Contains("--seed-only", StringComparer.OrdinalIgnoreCase))
