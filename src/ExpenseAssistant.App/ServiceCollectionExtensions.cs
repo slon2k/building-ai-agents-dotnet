@@ -59,6 +59,13 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
+    public static IServiceCollection AddSessionPersistence(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.AddScoped<ISessionStore, SessionStore>();
+        return services;
+    }
+
     public static IServiceCollection AddToolChatRunner(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
