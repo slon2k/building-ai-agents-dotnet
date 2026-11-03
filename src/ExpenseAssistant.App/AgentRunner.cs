@@ -43,8 +43,22 @@ public sealed class AgentRunner
 	}
 
 	public async Task<AgentRunResult> RunAsync(Guid sessionId, string userInput, CancellationToken cancellationToken)
+		=> await RunAsync(sessionId, Guid.NewGuid(), [], userInput, null, cancellationToken);
+
+	public async Task<AgentRunResult> RunAsync(
+		Guid sessionId,
+		Guid runId,
+		IReadOnlyList<ChatMessage> priorMessages,
+		string userInput,
+		Func<IReadOnlyList<ChatMessage>, Task>? onMessagesCommitted,
+		CancellationToken cancellationToken)
 	{
-		Guid runId = Guid.NewGuid();
+		ArgumentNullException.ThrowIfNull(priorMessages);
+		if (runId == Guid.Empty)
+		{
+			throw new ArgumentException("A run identifier is required.", nameof(runId));
+		}
+
 		long startTimestamp = Stopwatch.GetTimestamp();
 		using IDisposable? logScope = logger.BeginScope("SessionId:{SessionId} RunId:{RunId}", sessionId, runId);
 		using Activity? runActivity = StartSpan("assistant.run");
@@ -63,11 +77,9 @@ public sealed class AgentRunner
 		{
 			CancellationToken runToken = timeoutCts.Token;
 			runToken.ThrowIfCancellationRequested();
-			List<ChatMessage> messages =
-			[
-				new(ChatRole.System, systemPrompt),
-				new(ChatRole.User, userInput)
-			];
+			List<ChatMessage> messages = [new(ChatRole.System, systemPrompt)];
+			messages.AddRange(priorMessages);
+			messages.Add(new(ChatRole.User, userInput));
 			while (true)
 			{
 				runToken.ThrowIfCancellationRequested();
@@ -92,6 +104,10 @@ public sealed class AgentRunner
 					.SelectMany(message => message.Contents).OfType<FunctionCallContent>().ToArray();
 				if (calls.Length == 0)
 				{
+					if (onMessagesCommitted is not null && response.Messages.Count > 0)
+					{
+						await onMessagesCommitted(response.Messages.ToArray());
+					}
 					return Result(AgentRunStatus.Completed, response);
 				}
 
@@ -123,20 +139,26 @@ public sealed class AgentRunner
 				{
 					runToken.ThrowIfCancellationRequested();
 					object? result = await ExecuteToolAsync(call, runToken);
-					runToken.ThrowIfCancellationRequested();
 					results.Add(call.CallId, new FunctionResultContent(call.CallId, result));
 				}
 
+				List<ChatMessage> completedExchange = [];
 				foreach (ChatMessage message in response.Messages)
 				{
-					messages.Add(message);
+					completedExchange.Add(message);
 					List<AIContent> messageResults = message.Contents.OfType<FunctionCallContent>()
 						.Select(call => (AIContent)results[call.CallId]).ToList();
 					if (messageResults.Count > 0)
 					{
-						messages.Add(new ChatMessage(ChatRole.Tool, messageResults));
+						completedExchange.Add(new ChatMessage(ChatRole.Tool, messageResults));
 					}
 				}
+
+				if (onMessagesCommitted is not null)
+				{
+					await onMessagesCommitted(completedExchange);
+				}
+				messages.AddRange(completedExchange);
 			}
 		}
 		catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
