@@ -498,5 +498,13 @@ This follow-up supersedes the pending implementation items above without changin
 
 ### Remaining scope and next step
 
-- Context building, token/input budgets, summary generation and compaction remain pending.
-- Next: Module 5 Lab B, Parts 4-7. Add context selection, safe compaction, summary coverage and budget enforcement around the persisted history.
+- Context budgets, summary generation and automatic compaction remain pending.
+- Next: Module 5 Lab B Part 5. Add input-budget estimation and enforce it before every model request.
+
+### Lab B Part 4 progress
+
+- `ContextBuilder` validates that supplied messages and summary belong to the requested session, orders messages by sequence, and rejects duplicate/nonpositive sequences or summaries covering beyond the supplied history.
+- It places a labeled summary in user context, excludes summary-covered messages, and reports the coverage boundary and included message sequence numbers.
+- The message mapper reconstructs only complete matching tool-call/result exchanges. The builder rejects a summary boundary that splits a completed exchange.
+- The console now uses the builder before each run. Focused builder/console tests passed 11 tests; full regression suite passed 366 tests on 2026-11-03.
+- This is selection behavior only: no token budget, summary generation, automatic compaction or `/context` diagnostics are implemented yet.

@@ -167,6 +167,48 @@ public class ConsoleChatTests
     }
 
     [Fact]
+    public async Task RunAsync_UsesSummaryCoverageToSelectPriorContext()
+    {
+        TextReader originalInput = Console.In;
+        TextWriter originalOutput = Console.Out;
+        using var output = new StringWriter();
+        List<TrackingQueries> queries = [];
+        var client = new FakeChatClient((_, _) => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Done."))));
+        await using ServiceProvider provider = CreateProvider(client, queries);
+        MemorySessionStore sessionStore = (MemorySessionStore)provider.GetRequiredService<ISessionStore>();
+        Session session = await sessionStore.CreateSessionAsync("Summary test");
+        sessionStore.AddTextMessage(session.SessionId, "COVERED_HISTORY_MARKER");
+        sessionStore.AddTextMessage(session.SessionId, "RECENT_HISTORY_MARKER");
+        sessionStore.SetSummary(new SessionSummary
+        {
+            SessionId = session.SessionId,
+            SummaryText = "SUMMARY_CONTEXT_MARKER",
+            CoveredThroughSequenceNumber = 1,
+            Version = 1,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+
+        try
+        {
+            Console.SetIn(new StringReader("Current question?\nexit\n"));
+            Console.SetOut(output);
+
+            await provider.GetRequiredService<ConsoleChat>().RunAsync();
+
+            IReadOnlyList<ChatMessage> request = Assert.Single(client.ReceivedRequests);
+            Assert.Contains(request, message => message.Text.Contains("SUMMARY_CONTEXT_MARKER", StringComparison.Ordinal));
+            Assert.Contains(request, message => message.Text == "RECENT_HISTORY_MARKER");
+            Assert.DoesNotContain(request, message => message.Text.Contains("COVERED_HISTORY_MARKER", StringComparison.Ordinal));
+            Assert.Contains(request, message => message.Text == "Current question?");
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Console.SetOut(originalOutput);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_WhenHostStops_WaitsForRunCleanupBeforeDisposingScope()
     {
         TextReader originalInput = Console.In;
@@ -320,6 +362,7 @@ public class ConsoleChatTests
         private readonly List<Session> sessions = [];
         private readonly List<ConversationMessage> messages = [];
         private readonly List<SessionRun> runs = [];
+        private readonly Dictionary<Guid, SessionSummary> summaries = [];
 
         public IReadOnlyList<SessionRun> Runs => runs;
 
@@ -481,9 +524,15 @@ public class ConsoleChatTests
         }
 
         public Task<SessionSummary?> GetSummaryAsync(Guid sessionId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<SessionSummary?>(null);
+            Task.FromResult(summaries.GetValueOrDefault(sessionId));
 
-        public Task SaveSummaryAsync(SessionSummary summary, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task SaveSummaryAsync(SessionSummary summary, CancellationToken cancellationToken = default)
+        {
+            summaries[summary.SessionId] = summary;
+            return Task.CompletedTask;
+        }
+
+        public void SetSummary(SessionSummary summary) => summaries[summary.SessionId] = summary;
 
         public Task<SessionRun> StartRunAsync(Guid sessionId, Guid runId, CancellationToken cancellationToken = default)
         {

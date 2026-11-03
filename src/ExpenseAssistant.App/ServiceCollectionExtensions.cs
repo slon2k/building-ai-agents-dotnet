@@ -37,6 +37,7 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddSingleton<ContextBuilder>();
         services.AddScoped(provider => new ToolDispatcher(provider.GetRequiredService<ExpenseTools>().CreateFunctions()));
         services.AddScoped(provider =>
         {

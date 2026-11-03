@@ -54,8 +54,9 @@ public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 			{
 				IReadOnlyList<ConversationMessage> storedMessages = await sessionStore.GetMessagesAsync(
 					activeSession.SessionId, cancellationToken: cancellationToken);
-				IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> priorMessages =
-					ConversationMessageMapper.ToChatMessages(storedMessages);
+				SessionSummary? summary = await sessionStore.GetSummaryAsync(activeSession.SessionId, cancellationToken);
+				ContextBuildResult context = scope.ServiceProvider.GetRequiredService<ContextBuilder>()
+					.Build(activeSession.SessionId, storedMessages, summary);
 				await sessionStore.AppendMessagesAsync(activeSession.SessionId,
 				[
 					new ConversationMessageDraft(ConversationMessageRole.User,
@@ -66,7 +67,7 @@ public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 				Task<AgentRunResult> runTask = runner.RunAsync(
 					activeSession.SessionId,
 					runId,
-					priorMessages,
+					context.PriorMessages,
 					input,
 					async messages =>
 					{
