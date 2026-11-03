@@ -9,8 +9,13 @@ internal static class ConversationMessageMapper
 	private static readonly JsonSerializerOptions JsonOptions = JsonSerializerOptions.Web;
 
 	public static IReadOnlyList<ChatMessage> ToChatMessages(IReadOnlyList<ConversationMessage> storedMessages)
+		=> ToChatMessages(storedMessages, out _);
+
+	public static IReadOnlyList<ChatMessage> ToChatMessages(
+		IReadOnlyList<ConversationMessage> storedMessages, out IReadOnlyList<long> includedSequenceNumbers)
 	{
 		var messages = new List<ChatMessage>(storedMessages.Count);
+		var sequences = new List<long>(storedMessages.Count);
 		for (int index = 0; index < storedMessages.Count; index++)
 		{
 			ConversationMessage message = storedMessages[index];
@@ -36,6 +41,8 @@ internal static class ConversationMessageMapper
 				{
 					messages.Add(assistantMessage);
 					messages.Add(toolMessage);
+					sequences.Add(message.SequenceNumber);
+					sequences.Add(storedMessages[index].SequenceNumber);
 				}
 				continue;
 			}
@@ -49,9 +56,11 @@ internal static class ConversationMessageMapper
 			if (chatMessage is not null)
 			{
 				messages.Add(chatMessage);
+				sequences.Add(message.SequenceNumber);
 			}
 		}
 
+		includedSequenceNumbers = sequences.AsReadOnly();
 		return messages;
 	}
 
