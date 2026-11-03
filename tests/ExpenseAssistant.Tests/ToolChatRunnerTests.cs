@@ -248,7 +248,7 @@ public class ToolChatRunnerTests
     }
 
     [Fact]
-    public async Task ScopedRunners_UseDistinctContextsAndRunsButRetainConsoleSessionId()
+    public async Task ScopedRunners_UseDistinctContextsAndRunsForExplicitSessionId()
     {
         var client = new FakeChatClient((_, _) => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Hello."))));
         var services = new ServiceCollection();
@@ -258,13 +258,12 @@ public class ToolChatRunnerTests
         services.AddScoped<ExpenseTools>();
         services.AddScoped(provider => new ToolChatRunner(provider.GetRequiredService<IChatClient>(),
             provider.GetRequiredService<ExpenseTools>(), TimeSpan.FromSeconds(30), "Use tools."));
-        services.AddSingleton<ConsoleChat>();
         await using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateScopes = true,
             ValidateOnBuild = true
         });
-        Guid sessionId = provider.GetRequiredService<ConsoleChat>().SessionId;
+        Guid sessionId = Guid.NewGuid();
         ExpenseDbContext firstContext;
         ToolChatRunner firstRunner;
         ChatRunResult firstResult;
