@@ -175,6 +175,73 @@ public class SessionStoreTests
         Assert.Empty(await store.GetMessagesAsync(other.SessionId));
     }
 
+    [Fact]
+    public async Task SessionHistoryAndActiveRun_PersistAcrossRestartAndRecoverWithoutCrossSessionLeakage()
+    {
+        string databasePath = Path.Combine(Path.GetTempPath(), $"expense-session-{Guid.NewGuid():N}.db");
+        Guid firstSessionId;
+        Guid secondSessionId;
+        Guid interruptedRunId = Guid.NewGuid();
+        try
+        {
+            await using (ExpenseDbContext context = CreateFileContext(databasePath))
+            {
+                await context.Database.EnsureCreatedAsync();
+                var store = new SessionStore(context);
+                Session first = await store.CreateSessionAsync("First");
+                Session second = await store.CreateSessionAsync("Second");
+                firstSessionId = first.SessionId;
+                secondSessionId = second.SessionId;
+                await store.StartRunAsync(firstSessionId, interruptedRunId);
+                await store.AppendMessagesAsync(firstSessionId,
+                [
+                    new ConversationMessageDraft(ConversationMessageRole.User,
+                        [new TextMessagePartDraft("SESSION_A_MARKER")], interruptedRunId),
+                    new ConversationMessageDraft(ConversationMessageRole.Assistant,
+                        [new ToolCallMessagePartDraft("unfinished-call", "SearchTransactions", "{}")] , interruptedRunId)
+                ]);
+                await store.AppendMessagesAsync(secondSessionId,
+                [
+                    new ConversationMessageDraft(ConversationMessageRole.User,
+                        [new TextMessagePartDraft("SESSION_B_MARKER")])
+                ]);
+            }
+
+            await using (ExpenseDbContext context = CreateFileContext(databasePath))
+            {
+                var store = new SessionStore(context);
+                DateTimeOffset recoveredAt = DateTimeOffset.UtcNow;
+                Assert.Equal(1, await store.RecoverInterruptedRunsAsync(recoveredAt));
+
+                IReadOnlyList<ConversationMessage> firstMessages = await store.GetMessagesAsync(firstSessionId);
+                IReadOnlyList<ConversationMessage> secondMessages = await store.GetMessagesAsync(secondSessionId);
+                Assert.Equal(2, firstMessages.Count);
+                Assert.Single(secondMessages);
+                Assert.Contains(firstMessages.SelectMany(message => message.Parts),
+                    part => part.Text == "SESSION_A_MARKER");
+                Assert.DoesNotContain(firstMessages.SelectMany(message => message.Parts),
+                    part => part.Text == "SESSION_B_MARKER");
+                Assert.Contains(secondMessages.SelectMany(message => message.Parts),
+                    part => part.Text == "SESSION_B_MARKER");
+                Assert.DoesNotContain(secondMessages.SelectMany(message => message.Parts),
+                    part => part.Text == "SESSION_A_MARKER");
+                Assert.Equal("unfinished-call", Assert.Single(firstMessages[1].Parts).CallId);
+
+                SessionRun run = await context.SessionRuns.AsNoTracking()
+                    .SingleAsync(item => item.RunId == interruptedRunId);
+                Assert.Equal(SessionRunStatus.Interrupted, run.Status);
+                Assert.Equal(recoveredAt, run.EndedAt);
+            }
+        }
+        finally
+        {
+            if (File.Exists(databasePath))
+            {
+                File.Delete(databasePath);
+            }
+        }
+    }
+
     private static ExpenseDbContext CreateContext()
     {
         var context = new ExpenseDbContext(new DbContextOptionsBuilder<ExpenseDbContext>()
@@ -183,4 +250,9 @@ public class SessionStoreTests
         context.Database.EnsureCreated();
         return context;
     }
+
+    private static ExpenseDbContext CreateFileContext(string databasePath) =>
+        new(new DbContextOptionsBuilder<ExpenseDbContext>()
+            .UseSqlite($"Data Source={databasePath};Foreign Keys=True;Pooling=False")
+            .Options);
 }

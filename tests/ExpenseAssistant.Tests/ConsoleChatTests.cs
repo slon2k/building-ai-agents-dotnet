@@ -42,6 +42,21 @@ public class ConsoleChatTests
             Assert.Contains("Assistant: No matching spending.", output.ToString());
             Assert.Contains("status=Completed", output.ToString());
             Assert.Contains("Run usage", output.ToString());
+            MemorySessionStore sessionStore = (MemorySessionStore)provider.GetRequiredService<ISessionStore>();
+            Session session = Assert.Single(await sessionStore.ListSessionsAsync());
+            ConversationMessage[] storedMessages = (await sessionStore.GetMessagesAsync(session.SessionId)).ToArray();
+            Assert.Equal(new[]
+            {
+                ConversationMessageRole.User,
+                ConversationMessageRole.Assistant,
+                ConversationMessageRole.Tool,
+                ConversationMessageRole.Assistant
+            }, storedMessages.Select(message => message.Role));
+            Assert.All(storedMessages, message => Assert.NotNull(message.RunId));
+            SessionRun run = Assert.Single(sessionStore.Runs);
+            Assert.Equal(SessionRunStatus.Completed, run.Status);
+            Assert.Equal(2, run.ModelStepCount);
+            Assert.Equal(1, run.ToolCallCount);
         }
         finally
         {
@@ -62,6 +77,9 @@ public class ConsoleChatTests
         MemorySessionStore sessionStore = (MemorySessionStore)provider.GetRequiredService<ISessionStore>();
         Session existingSession = await sessionStore.CreateSessionAsync("Existing session");
         sessionStore.AddTextMessage(existingSession.SessionId, "SAVED_HISTORY_MARKER");
+        sessionStore.AddIncompleteToolCall(existingSession.SessionId, "orphan-call");
+        Session otherSession = await sessionStore.CreateSessionAsync("Other session");
+        sessionStore.AddTextMessage(otherSession.SessionId, "OTHER_SESSION_MARKER");
         var runSpans = new ConcurrentQueue<Activity>();
         using ActivityListener listener = ListenForRuns(runSpans);
 
@@ -74,14 +92,72 @@ public class ConsoleChatTests
             await provider.GetRequiredService<ConsoleChat>().RunAsync();
 
             Assert.Contains("Existing session", output.ToString());
-            Assert.Contains("SAVED_HISTORY_MARKER", output.ToString());
+            Assert.Contains("OTHER_SESSION_MARKER", output.ToString());
             Assert.Contains("Weekend trip", output.ToString());
             Assert.Contains($"Selected session: Existing session ({existingSession.SessionId})", output.ToString());
             Assert.Equal(existingSession.SessionId.ToString(), Assert.Single(runSpans).GetTagItem("session.id"));
             Assert.Single(client.ReceivedRequests);
+            IReadOnlyList<ChatMessage> request = Assert.Single(client.ReceivedRequests);
+            Assert.Contains(request, message => message.Text == "SAVED_HISTORY_MARKER");
+            Assert.DoesNotContain(request, message => message.Text == "OTHER_SESSION_MARKER");
+            Assert.DoesNotContain(request.SelectMany(message => message.Contents),
+                content => content is FunctionCallContent call && call.CallId == "orphan-call");
             Assert.Collection(await sessionStore.ListSessionsAsync(),
+                session => Assert.Equal("Existing session", session.DisplayName),
                 session => Assert.Equal("Weekend trip", session.DisplayName),
-                session => Assert.Equal("Existing session", session.DisplayName));
+                session => Assert.Equal("Other session", session.DisplayName));
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Console.SetOut(originalOutput);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_PersistsTurnsAndResumesHistoryOnNextConsoleRun()
+    {
+        TextReader originalInput = Console.In;
+        TextWriter originalOutput = Console.Out;
+        using var output = new StringWriter();
+        List<TrackingQueries> queries = [];
+        Queue<ChatResponse> responses = new([
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "First answer.")),
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, "Follow-up answer."))
+        ]);
+        var client = new FakeChatClient((_, _) => Task.FromResult(responses.Dequeue()));
+        await using ServiceProvider provider = CreateProvider(client, queries);
+        MemorySessionStore sessionStore = (MemorySessionStore)provider.GetRequiredService<ISessionStore>();
+
+        try
+        {
+            Console.SetOut(output);
+            Console.SetIn(new StringReader("First question?\nexit\n"));
+            await provider.GetRequiredService<ConsoleChat>().RunAsync();
+
+            Console.SetIn(new StringReader("Follow-up question?\nexit\n"));
+            await provider.GetRequiredService<ConsoleChat>().RunAsync();
+
+            Session session = Assert.Single(await sessionStore.ListSessionsAsync());
+            ConversationMessage[] messages = (await sessionStore.GetMessagesAsync(session.SessionId)).ToArray();
+            Assert.Equal(new[]
+            {
+                ConversationMessageRole.User,
+                ConversationMessageRole.Assistant,
+                ConversationMessageRole.User,
+                ConversationMessageRole.Assistant
+            }, messages.Select(message => message.Role));
+            Assert.Equal(messages[0].RunId, messages[1].RunId);
+            Assert.Equal(messages[2].RunId, messages[3].RunId);
+            Assert.NotEqual(messages[0].RunId, messages[2].RunId);
+            Assert.Equal(new[] { SessionRunStatus.Completed, SessionRunStatus.Completed },
+                sessionStore.Runs.Select(run => run.Status));
+            Assert.Equal(2, client.ReceivedRequests.Count);
+            Assert.Equal(2, client.ReceivedRequests[0].Count);
+            Assert.Equal(4, client.ReceivedRequests[1].Count);
+            Assert.Contains(client.ReceivedRequests[1], message => message.Text == "First question?");
+            Assert.Contains(client.ReceivedRequests[1], message => message.Text == "First answer.");
+            Assert.Contains(client.ReceivedRequests[1], message => message.Text == "Follow-up question?");
         }
         finally
         {
@@ -143,6 +219,11 @@ public class ConsoleChatTests
             Assert.True(Assert.Single(queries).IsDisposed);
             Assert.Single(client.ReceivedRequests);
             Assert.Contains("[cancelled]", output.ToString());
+            MemorySessionStore sessionStore = (MemorySessionStore)provider.GetRequiredService<ISessionStore>();
+            Session session = Assert.Single(await sessionStore.ListSessionsAsync());
+            Assert.Equal(SessionRunStatus.Cancelled, Assert.Single(sessionStore.Runs).Status);
+            Assert.Equal(ConversationMessageRole.User,
+                Assert.Single(await sessionStore.GetMessagesAsync(session.SessionId)).Role);
         }
         finally
         {
@@ -238,6 +319,9 @@ public class ConsoleChatTests
     {
         private readonly List<Session> sessions = [];
         private readonly List<ConversationMessage> messages = [];
+        private readonly List<SessionRun> runs = [];
+
+        public IReadOnlyList<SessionRun> Runs => runs;
 
         public Task<Session> CreateSessionAsync(string displayName, CancellationToken cancellationToken = default)
         {
@@ -261,6 +345,76 @@ public class ConsoleChatTests
             return Task.FromResult(result);
         }
 
+        public Task<IReadOnlyList<ConversationMessage>> AppendMessagesAsync(
+            Guid sessionId, IReadOnlyList<ConversationMessageDraft> drafts, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (drafts.Count == 0)
+            {
+                throw new ArgumentException("At least one message is required.", nameof(drafts));
+            }
+
+            Session session = sessions.SingleOrDefault(item => item.SessionId == sessionId)
+                ?? throw new KeyNotFoundException($"Session '{sessionId}' does not exist.");
+            Guid? runId = drafts[0].RunId;
+            if (drafts.Any(draft => draft.RunId != runId)
+                || runId is Guid activeRunId && !runs.Any(run => run.SessionId == sessionId
+                    && run.RunId == activeRunId && run.Status == SessionRunStatus.Running))
+            {
+                throw new InvalidOperationException("Messages must belong to one active session run.");
+            }
+
+            long nextSequence = messages.Where(message => message.SessionId == sessionId)
+                .Select(message => message.SequenceNumber).DefaultIfEmpty().Max() + 1;
+            var appended = new List<ConversationMessage>(drafts.Count);
+            foreach (ConversationMessageDraft draft in drafts)
+            {
+                Guid messageId = Guid.NewGuid();
+                List<ConversationMessagePart> parts = draft.Parts.Select((part, ordinal) => part switch
+                {
+                    TextMessagePartDraft text => new ConversationMessagePart
+                    {
+                        MessageId = messageId,
+                        Ordinal = ordinal,
+                        Kind = ConversationMessagePartKind.Text,
+                        Text = text.Text
+                    },
+                    ToolCallMessagePartDraft call => new ConversationMessagePart
+                    {
+                        MessageId = messageId,
+                        Ordinal = ordinal,
+                        Kind = ConversationMessagePartKind.ToolCall,
+                        CallId = call.CallId,
+                        ToolName = call.ToolName,
+                        ArgumentsJson = call.ArgumentsJson
+                    },
+                    ToolResultMessagePartDraft result => new ConversationMessagePart
+                    {
+                        MessageId = messageId,
+                        Ordinal = ordinal,
+                        Kind = ConversationMessagePartKind.ToolResult,
+                        CallId = result.CallId,
+                        ResultJson = result.ResultJson
+                    },
+                    _ => throw new ArgumentException("Unsupported message part.", nameof(drafts))
+                }).ToList();
+                var message = new ConversationMessage
+                {
+                    MessageId = messageId,
+                    SessionId = sessionId,
+                    RunId = draft.RunId,
+                    SequenceNumber = nextSequence++,
+                    Role = draft.Role,
+                    Parts = parts
+                };
+                appended.Add(message);
+            }
+
+            messages.AddRange(appended);
+            session.LastActivityAt = DateTimeOffset.UtcNow;
+            return Task.FromResult<IReadOnlyList<ConversationMessage>>(appended);
+        }
+
         public Task<Session?> GetSessionAsync(Guid sessionId, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -281,6 +435,7 @@ public class ConsoleChatTests
         public void AddTextMessage(Guid sessionId, string text)
         {
             Guid messageId = Guid.NewGuid();
+            Session session = sessions.Single(item => item.SessionId == sessionId);
             messages.Add(new ConversationMessage
             {
                 MessageId = messageId,
@@ -298,26 +453,79 @@ public class ConsoleChatTests
                     }
                 ]
             });
+            session.LastActivityAt = DateTimeOffset.UtcNow;
         }
 
-        public Task<IReadOnlyList<ConversationMessage>> AppendMessagesAsync(
-            Guid sessionId, IReadOnlyList<ConversationMessageDraft> messages, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public void AddIncompleteToolCall(Guid sessionId, string callId)
+        {
+            Guid messageId = Guid.NewGuid();
+            messages.Add(new ConversationMessage
+            {
+                MessageId = messageId,
+                SessionId = sessionId,
+                SequenceNumber = messages.Count(message => message.SessionId == sessionId) + 1,
+                Role = ConversationMessageRole.Assistant,
+                Parts =
+                [
+                    new ConversationMessagePart
+                    {
+                        MessageId = messageId,
+                        Ordinal = 0,
+                        Kind = ConversationMessagePartKind.ToolCall,
+                        CallId = callId,
+                        ToolName = "SearchTransactions",
+                        ArgumentsJson = "{}"
+                    }
+                ]
+            });
+        }
 
         public Task<SessionSummary?> GetSummaryAsync(Guid sessionId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            Task.FromResult<SessionSummary?>(null);
 
-        public Task SaveSummaryAsync(SessionSummary summary, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task SaveSummaryAsync(SessionSummary summary, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public Task<SessionRun> StartRunAsync(Guid sessionId, Guid runId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task<SessionRun> StartRunAsync(Guid sessionId, Guid runId, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (sessions.All(session => session.SessionId != sessionId))
+            {
+                throw new KeyNotFoundException($"Session '{sessionId}' does not exist.");
+            }
 
-        public Task<SessionRun> FinishRunAsync(SessionRun finishedRun, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            var run = new SessionRun
+            {
+                RunId = runId,
+                SessionId = sessionId,
+                StartedAt = DateTimeOffset.UtcNow,
+                Status = SessionRunStatus.Running
+            };
+            runs.Add(run);
+            return Task.FromResult(run);
+        }
+
+        public Task<SessionRun> FinishRunAsync(SessionRun finishedRun, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SessionRun run = runs.Single(item => item.SessionId == finishedRun.SessionId && item.RunId == finishedRun.RunId);
+            run.EndedAt = finishedRun.EndedAt;
+            run.Status = finishedRun.Status;
+            run.StopReason = finishedRun.StopReason;
+            run.ModelStepCount = finishedRun.ModelStepCount;
+            run.ToolCallCount = finishedRun.ToolCallCount;
+            run.InputTokenCount = finishedRun.InputTokenCount;
+            run.OutputTokenCount = finishedRun.OutputTokenCount;
+            run.TotalTokenCount = finishedRun.TotalTokenCount;
+            return Task.FromResult(run);
+        }
 
         public Task<int> RecoverInterruptedRunsAsync(DateTimeOffset endedAt, CancellationToken cancellationToken = default) =>
-            Task.FromResult(0);
+            Task.FromResult(runs.Where(run => run.Status == SessionRunStatus.Running).Count(run =>
+            {
+                run.Status = SessionRunStatus.Interrupted;
+                run.EndedAt = endedAt;
+                return true;
+            }));
     }
 }
 

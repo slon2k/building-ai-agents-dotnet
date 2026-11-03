@@ -463,3 +463,40 @@ This follow-up supersedes the pending implementation items above without changin
 - Earlier full-suite verification passed 337 tests before the final keyword/hardening changes; the latest run was focused, not a new full-suite run.
 - By user decision, all relevance labels remain draft and relevant sets incomplete; quality metrics remain null. Label review, quality conclusions, held-out tuning/generalization checks, embedded-field comparisons and final-answer reviews are deferred. The earlier observed answer overclaims remain unresolved review evidence. Dedicated diagnostic content-exclusion/failure/cancellation verification is also deferred.
 - Handoff status: **Module 4 is implemented and mechanically verified; quality evaluation is incomplete and explicitly deferred.** Proceeding to Module 5 is acceptable with that qualification, not as a claim that every Module 4 evaluation criterion has passed.
+
+## Module 5 Lab A Checkpoint
+
+### Status
+
+- Recorded on 2026-11-03 for the working-tree implementation. Lab A (Parts 1-3) is implemented and deterministically verified; this does not complete Module 5.
+- Existing session, message, summary and run storage is now used by the interactive console. The active session remains console-owned.
+
+### Implemented
+
+- The console resumes the most recently active session and supports `/new`, `/sessions`, `/use` and `/history`.
+- Each turn creates a run record, stores the user message, loads only that session's valid prior exchanges, and stores the final assistant response.
+- `AgentRunner` accepts an explicit run ID and prior history. It persists each completed tool request/result batch before issuing another model request.
+- Incomplete tool exchanges are excluded from reconstructed model history. Completed batches are retained if cancellation arrives after their tools finish.
+- Terminal run status, stop reason, model/tool counters and available token usage are persisted. Startup recovery marks abandoned running records interrupted; no unfinished run is replayed.
+
+### Recovery policy
+
+- A run left in `Running` is marked `Interrupted` at application startup.
+- Stored history is retained for diagnosis. Only complete, matching assistant tool-call/result pairs are reconstructed into a later model request.
+- No automatic tool replay is performed.
+
+### Verification
+
+- `dotnet test tests/ExpenseAssistant.Tests/ExpenseAssistant.Tests.csproj --configuration Release -p:OutDir="$env:TEMP\ExpenseAssistant.Module5Tests\" --logger "trx;LogFileName=module5-lab-a-20261103.trx" --results-directory evals/results`: passed, 360 tests, 0 failures.
+- Local TRX report: [module5-lab-a-20261103.trx](../evals/results/module5-lab-a-20261103.trx). The results directory is Git-ignored.
+- Focused runner, console, session-store and persistence-schema tests: 63 passed, 0 failed.
+- File-backed SQLite restart test verifies two-session isolation and interrupted-run recovery. Console tests verify resumed context, complete tool exchanges, incomplete-call exclusion, selected-session routing and cancellation status.
+- User-reported live console smoke test on 2026-11-03: session `0765c62f-5050-4e1a-b4fa-d81118e26491` retained two turns across application exit/restart. `/history` after restart showed the user turns, the exact-search request and matching result, and both assistant replies. A new `Isolation test` session showed empty history; switching back to the original session restored its history.
+- Live follow-up asked which of the two March grocery purchases was largest; the assistant selected the EUR 12.50 purchase, consistent with the earlier exchange. Run IDs: `2b2616b4-17b5-4387-92cc-e98ebe5cb3d0` and `0980d2fa-74c8-48ca-a048-2c6c1dbeda47`.
+- Session commands require the documented slash prefix. The bare text `use <session-id>` was treated as a normal expense question and recorded in the currently selected session; `/use <session-id>` switched sessions as expected.
+- Test builds used a temporary output directory because an interactive app process had the normal Release binaries loaded.
+
+### Remaining scope and next step
+
+- Context building, token/input budgets, summary generation and compaction remain pending.
+- Next: Module 5 Lab B, Parts 4-7. Add context selection, safe compaction, summary coverage and budget enforcement around the persisted history.

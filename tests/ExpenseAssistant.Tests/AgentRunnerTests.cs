@@ -35,6 +35,42 @@ public class AgentRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_WithPriorMessagesAndCommitCallback_PersistsCompleteToolExchangesAndFinalAnswer()
+    {
+        AIFunction function = AIFunctionFactory.Create((int value) => value * 2, "Double");
+        var toolRequest = new ChatMessage(ChatRole.Assistant, [Call("double-1", "Double", "{\"value\":3}")]);
+        ChatResponse finalResponse = Reply("The result is 6.");
+        var client = Client(new ChatResponse(toolRequest), finalResponse);
+        ChatMessage priorMessage = new(ChatRole.User, "Earlier question.");
+        List<IReadOnlyList<ChatMessage>> committedBatches = [];
+        Guid sessionId = Guid.NewGuid();
+        Guid runId = Guid.NewGuid();
+
+        AgentRunResult result = await CreateRunner(client, [function]).RunAsync(
+            sessionId,
+            runId,
+            [priorMessage],
+            "Current question.",
+            messages =>
+            {
+                committedBatches.Add(messages.ToArray());
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(runId, result.RunId);
+        Assert.Equal(3, client.ReceivedRequests[0].Count);
+        Assert.Same(priorMessage, client.ReceivedRequests[0][1]);
+        Assert.Equal("Current question.", client.ReceivedRequests[0][2].Text);
+        Assert.Equal(5, client.ReceivedRequests[1].Count);
+        Assert.Equal(2, committedBatches.Count);
+        Assert.Equal(new[] { ChatRole.Assistant, ChatRole.Tool }, committedBatches[0].Select(message => message.Role));
+        Assert.Equal("double-1", Assert.Single(committedBatches[0][1].Contents.OfType<FunctionResultContent>()).CallId);
+        Assert.Same(finalResponse.Messages[0], Assert.Single(committedBatches[1]));
+    }
+
+    [Fact]
     public async Task RunAsync_WithTools_PreservesMessagesExecutesSequentiallyAndKeepsToolsAvailable()
     {
         List<int> executions = [];
@@ -226,6 +262,38 @@ public class AgentRunnerTests
         Assert.Equal(timeout ? AgentStopReason.DurationLimit : (AgentStopReason?)null, result.StopReason);
         Assert.Equal(1, result.ModelStepCount);
         Assert.Equal(1, result.ToolCallCount);
+        Assert.Single(client.ReceivedRequests);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenCancellationFollowsCompletedTool_PersistsTheCompleteExchange()
+    {
+        using var cancellation = new CancellationTokenSource();
+        AIFunction function = AIFunctionFactory.Create(() =>
+        {
+            cancellation.Cancel();
+            return "completed";
+        }, "CompleteThenCancel");
+        var client = Client(new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            [Call("completed-call", "CompleteThenCancel")] )));
+        List<IReadOnlyList<ChatMessage>> committedBatches = [];
+
+        AgentRunResult result = await CreateRunner(client, [function]).RunAsync(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            [],
+            "Question?",
+            messages =>
+            {
+                committedBatches.Add(messages.ToArray());
+                return Task.CompletedTask;
+            },
+            cancellation.Token);
+
+        Assert.Equal(AgentRunStatus.Cancelled, result.Status);
+        Assert.Equal(new[] { ChatRole.Assistant, ChatRole.Tool },
+            Assert.Single(committedBatches).Select(message => message.Role));
+        Assert.Equal("completed-call", Assert.Single(committedBatches[0][1].Contents.OfType<FunctionResultContent>()).CallId);
         Assert.Single(client.ReceivedRequests);
     }
 

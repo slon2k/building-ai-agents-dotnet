@@ -36,21 +36,65 @@ public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 			}
 
 			using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-			AgentRunner runner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
-			Task<AgentRunResult> runTask = runner.RunAsync(activeSession.SessionId, input, cts.Token);
-
-			// .NET has no async key read, so poll for Esc while the request runs.
-			while (!runTask.IsCompleted)
+			Guid runId = Guid.NewGuid();
+			SessionRun runningRun;
+			try
 			{
-				if (!Console.IsInputRedirected && Console.KeyAvailable && Console.ReadKey(intercept: true).Key == ConsoleKey.Escape)
-				{
-					cts.Cancel();
-				}
-
-				await Task.Delay(50, cancellationToken);
+				runningRun = await sessionStore.StartRunAsync(activeSession.SessionId, runId, cancellationToken);
+			}
+			catch (SessionRunAlreadyActiveException)
+			{
+				Console.WriteLine("[session already has an active run]");
+				continue;
 			}
 
-			AgentRunResult result = await runTask;
+			AgentRunResult result = new(activeSession.SessionId, runId, AgentRunStatus.Failed,
+				TimeSpan.Zero, 0, 0, Error: "The assistant request could not be completed.");
+			try
+			{
+				IReadOnlyList<ConversationMessage> storedMessages = await sessionStore.GetMessagesAsync(
+					activeSession.SessionId, cancellationToken: cancellationToken);
+				IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> priorMessages =
+					ConversationMessageMapper.ToChatMessages(storedMessages);
+				await sessionStore.AppendMessagesAsync(activeSession.SessionId,
+				[
+					new ConversationMessageDraft(ConversationMessageRole.User,
+						[new TextMessagePartDraft(input)], runId)
+				], cancellationToken);
+
+				AgentRunner runner = scope.ServiceProvider.GetRequiredService<AgentRunner>();
+				Task<AgentRunResult> runTask = runner.RunAsync(
+					activeSession.SessionId,
+					runId,
+					priorMessages,
+					input,
+					async messages =>
+					{
+						IReadOnlyList<ConversationMessageDraft> drafts = ConversationMessageMapper.ToDrafts(messages, runId);
+						if (drafts.Count > 0)
+						{
+							await sessionStore.AppendMessagesAsync(activeSession.SessionId, drafts, CancellationToken.None);
+						}
+					},
+					cts.Token);
+
+				// .NET has no async key read, so poll for Esc while the request runs.
+				while (!runTask.IsCompleted)
+				{
+					if (!Console.IsInputRedirected && Console.KeyAvailable && Console.ReadKey(intercept: true).Key == ConsoleKey.Escape)
+					{
+						cts.Cancel();
+					}
+
+					await Task.Delay(50);
+				}
+
+				result = await runTask;
+			}
+			finally
+			{
+				await sessionStore.FinishRunAsync(CreateFinishedRun(runningRun, result), CancellationToken.None);
+			}
 
 			switch (result)
 			{
@@ -161,4 +205,33 @@ public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 
 	private static void PrintActiveSession(Session session, string label) =>
 		Console.WriteLine($"{label}: {session.DisplayName} ({session.SessionId})");
+
+	private static SessionRun CreateFinishedRun(SessionRun runningRun, AgentRunResult result) => new()
+	{
+		RunId = runningRun.RunId,
+		SessionId = runningRun.SessionId,
+		StartedAt = runningRun.StartedAt,
+		EndedAt = DateTimeOffset.UtcNow,
+		Status = result.Status switch
+		{
+			AgentRunStatus.Completed => SessionRunStatus.Completed,
+			AgentRunStatus.Failed => SessionRunStatus.Failed,
+			AgentRunStatus.Cancelled => SessionRunStatus.Cancelled,
+			AgentRunStatus.BudgetExceeded => SessionRunStatus.BudgetExceeded,
+			_ => throw new ArgumentOutOfRangeException(nameof(result))
+		},
+		StopReason = result.StopReason switch
+		{
+			null => null,
+			AgentStopReason.ModelStepLimit => SessionRunStopReason.ModelStepLimit,
+			AgentStopReason.ToolCallLimit => SessionRunStopReason.ToolCallLimit,
+			AgentStopReason.DurationLimit => SessionRunStopReason.DurationLimit,
+			_ => throw new ArgumentOutOfRangeException(nameof(result))
+		},
+		ModelStepCount = result.ModelStepCount,
+		ToolCallCount = result.ToolCallCount,
+		InputTokenCount = result.Usage?.InputTokenCount,
+		OutputTokenCount = result.Usage?.OutputTokenCount,
+		TotalTokenCount = result.Usage?.TotalTokenCount
+	};
 }
