@@ -66,6 +66,48 @@ public class ConsoleChatTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenInputBudgetIsExceeded_PersistsContextLimitWithoutModelRequest()
+    {
+        TextReader originalInput = Console.In;
+        TextWriter originalOutput = Console.Out;
+        using var output = new StringWriter();
+        List<TrackingQueries> queries = [];
+        var client = new FakeChatClient((_, _) => Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Not requested."))));
+        var options = new AssistantOptions
+        {
+            SystemPrompt = "Use tools.",
+            ContextBudgetTokens = 3,
+            ReservedOutputTokens = 1,
+            ContextSafetyMarginTokens = 1
+        };
+        await using ServiceProvider provider = CreateProvider(client, queries, options);
+
+        try
+        {
+            Console.SetIn(new StringReader("Question?\nexit\n"));
+            Console.SetOut(output);
+
+            await provider.GetRequiredService<ConsoleChat>().RunAsync();
+
+            Assert.Empty(client.ReceivedRequests);
+            MemorySessionStore sessionStore = (MemorySessionStore)provider.GetRequiredService<ISessionStore>();
+            Session session = Assert.Single(await sessionStore.ListSessionsAsync());
+            ConversationMessage userMessage = Assert.Single(await sessionStore.GetMessagesAsync(session.SessionId));
+            Assert.Equal(ConversationMessageRole.User, userMessage.Role);
+            SessionRun run = Assert.Single(sessionStore.Runs);
+            Assert.Equal(SessionRunStatus.BudgetExceeded, run.Status);
+            Assert.Equal(SessionRunStopReason.ContextLimit, run.StopReason);
+            Assert.Equal(0, run.ModelStepCount);
+            Assert.Contains("BudgetExceeded", output.ToString());
+        }
+        finally
+        {
+            Console.SetIn(originalInput);
+            Console.SetOut(originalOutput);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_SupportsSessionCommandsAndRunsInSelectedSession()
     {
         TextReader originalInput = Console.In;
@@ -301,12 +343,13 @@ public class ConsoleChatTests
         Assert.NotSame(first.ServiceProvider.GetRequiredService<AgentRunner>(), second.ServiceProvider.GetRequiredService<AgentRunner>());
     }
 
-    private static ServiceProvider CreateProvider(IChatClient client, List<TrackingQueries> queries)
+    private static ServiceProvider CreateProvider(
+        IChatClient client, List<TrackingQueries> queries, AssistantOptions? assistantOptions = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton(client);
-        services.AddSingleton(new AssistantOptions { SystemPrompt = "Use tools." });
+        services.AddSingleton(assistantOptions ?? new AssistantOptions { SystemPrompt = "Use tools." });
         services.AddScoped<ITransactionQueries>(_ =>
         {
             var scopedQueries = new TrackingQueries();

@@ -10,6 +10,8 @@ public sealed class AgentRunner
 {
 	public const string ActivitySourceName = "ExpenseAssistant.App.AgentRunner";
 	private static readonly ActivitySource Activities = new(ActivitySourceName);
+	private static readonly Lazy<IInputTokenEstimator> DefaultInputTokenEstimator =
+		new(() => new InputTokenEstimator("o200k_base"));
 
 	private readonly IChatClient chatClient;
 	private readonly ToolDispatcher dispatcher;
@@ -17,11 +19,15 @@ public sealed class AgentRunner
 	private readonly string systemPrompt;
 	private readonly int maxModelSteps;
 	private readonly int maxToolCalls;
+	private readonly int maxInputTokens;
+	private readonly int? maxOutputTokens;
+	private readonly IInputTokenEstimator inputTokenEstimator;
 	private readonly ILogger<AgentRunner> logger;
 
 	public AgentRunner(
 		IChatClient chatClient, ToolDispatcher dispatcher, string systemPrompt,
-		AgentRunOptions options, ILogger<AgentRunner>? logger = null)
+		AgentRunOptions options, ILogger<AgentRunner>? logger = null,
+		IInputTokenEstimator? inputTokenEstimator = null)
 	{
 		ArgumentNullException.ThrowIfNull(chatClient);
 		ArgumentNullException.ThrowIfNull(dispatcher);
@@ -32,6 +38,11 @@ public sealed class AgentRunner
 		ArgumentOutOfRangeException.ThrowIfGreaterThan(maxDuration.TotalMilliseconds, uint.MaxValue - 1d);
 		ArgumentOutOfRangeException.ThrowIfLessThan(options.MaxModelSteps, 1);
 		ArgumentOutOfRangeException.ThrowIfLessThan(options.MaxToolCalls, 1);
+		ArgumentOutOfRangeException.ThrowIfLessThan(options.MaxInputTokens, 1);
+		if (options.MaxOutputTokens is int configuredOutputTokens)
+		{
+			ArgumentOutOfRangeException.ThrowIfLessThan(configuredOutputTokens, 1);
+		}
 
 		this.chatClient = chatClient;
 		this.dispatcher = dispatcher;
@@ -39,6 +50,9 @@ public sealed class AgentRunner
 		this.systemPrompt = systemPrompt;
 		maxModelSteps = options.MaxModelSteps;
 		maxToolCalls = options.MaxToolCalls;
+		maxInputTokens = options.MaxInputTokens;
+		maxOutputTokens = options.MaxOutputTokens;
+		this.inputTokenEstimator = inputTokenEstimator ?? DefaultInputTokenEstimator.Value;
 		this.logger = logger ?? NullLogger<AgentRunner>.Instance;
 	}
 
@@ -64,10 +78,13 @@ public sealed class AgentRunner
 		using Activity? runActivity = StartSpan("assistant.run");
 		runActivity?.SetTag("budget.max_model_steps", maxModelSteps);
 		runActivity?.SetTag("budget.max_tool_calls", maxToolCalls);
+		runActivity?.SetTag("budget.max_input_tokens", maxInputTokens);
+		runActivity?.SetTag("budget.max_output_tokens", maxOutputTokens);
 		runActivity?.SetTag("budget.max_duration_ms", requestTimeout.TotalMilliseconds);
 		List<UsageDetails?> modelUsages = [];
 		HashSet<string> callIds = new(StringComparer.Ordinal);
 		int toolCallCount = 0;
+		long? estimatedInputTokens = null;
 		using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 		timeoutCts.CancelAfter(requestTimeout);
 		logger.LogInformation("Run started MaxModelSteps={MaxModelSteps} MaxToolCalls={MaxToolCalls} MaxDurationMs={MaxDurationMs}",
@@ -96,8 +113,24 @@ public sealed class AgentRunner
 						stopReason: AgentStopReason.ToolCallLimit);
 				}
 
-				ChatResponse response = await RequestModelAsync(messages,
-					new ChatOptions { Tools = dispatcher.Functions.Cast<AITool>().ToList() }, runToken);
+				IReadOnlyList<AIFunction> functions = dispatcher.Functions;
+				estimatedInputTokens = inputTokenEstimator.Estimate(messages, functions);
+				runActivity?.SetTag("budget.input.estimated_tokens", estimatedInputTokens.Value);
+				if (estimatedInputTokens.Value > maxInputTokens)
+				{
+					logger.LogWarning("Context input limit reached Step={Step} EstimatedInputTokens={EstimatedInputTokens} MaxInputTokens={MaxInputTokens}",
+						modelUsages.Count + 1, estimatedInputTokens.Value, maxInputTokens);
+					return Result(AgentRunStatus.BudgetExceeded,
+						error: "The assembled conversation exceeds the available input-token budget.",
+						stopReason: AgentStopReason.ContextLimit);
+				}
+
+				var chatOptions = new ChatOptions { Tools = functions.Cast<AITool>().ToList() };
+				if (maxOutputTokens is int outputTokenLimit)
+				{
+					chatOptions.MaxOutputTokens = outputTokenLimit;
+				}
+				ChatResponse response = await RequestModelAsync(messages, chatOptions, runToken, estimatedInputTokens.Value);
 				runToken.ThrowIfCancellationRequested();
 
 				FunctionCallContent[] calls = response.Messages
@@ -187,11 +220,12 @@ public sealed class AgentRunner
 			runActivity?.SetTag("model.steps", modelUsages.Count);
 			runActivity?.SetTag("tool.calls", toolCallCount);
 			runActivity?.SetTag("stop.reason", stopReason?.ToString());
+			runActivity?.SetTag("estimated.input.tokens", estimatedInputTokens);
 			SetUsageTags(runActivity, usage);
 			logger.Log(status == AgentRunStatus.Completed ? LogLevel.Information : LogLevel.Warning,
-				"Run finished Outcome={Outcome} ErrorCode={ErrorCode} StopReason={StopReason} DurationMs={DurationMs} ModelRequests={ModelRequests} ToolCalls={ToolCalls} InputTokens={InputTokens} OutputTokens={OutputTokens} TotalTokens={TotalTokens}",
+				"Run finished Outcome={Outcome} ErrorCode={ErrorCode} StopReason={StopReason} DurationMs={DurationMs} ModelRequests={ModelRequests} ToolCalls={ToolCalls} EstimatedInputTokens={EstimatedInputTokens} InputTokens={InputTokens} OutputTokens={OutputTokens} TotalTokens={TotalTokens}",
 				status, errorCode, stopReason, duration.TotalMilliseconds, modelUsages.Count, toolCallCount,
-				usage?.InputTokenCount, usage?.OutputTokenCount, usage?.TotalTokenCount);
+				estimatedInputTokens, usage?.InputTokenCount, usage?.OutputTokenCount, usage?.TotalTokenCount);
 			return new(sessionId, runId, status, duration, modelUsages.Count, toolCallCount, response, error, usage, stopReason);
 		}
 
@@ -204,12 +238,13 @@ public sealed class AgentRunner
 		}
 
 		async Task<ChatResponse> RequestModelAsync(
-			List<ChatMessage> messages, ChatOptions options, CancellationToken token)
+			List<ChatMessage> messages, ChatOptions options, CancellationToken token, long estimatedTokens)
 		{
 			int step = modelUsages.Count + 1;
 			using IDisposable? stepScope = logger.BeginScope("Step:{Step}", step);
 			using Activity? activity = StartSpan("model.step", ActivityKind.Client);
 			activity?.SetTag("model.step", step);
+			activity?.SetTag("gen_ai.usage.input_tokens.estimated", estimatedTokens);
 			long started = Stopwatch.GetTimestamp();
 			int usageIndex = modelUsages.Count;
 			modelUsages.Add(null);
@@ -326,7 +361,9 @@ public sealed class AgentRunner
 public sealed record AgentRunOptions(
     int MaxModelSteps = 6,
     int MaxToolCalls = 10,
-    TimeSpan? MaxDuration = null);
+	TimeSpan? MaxDuration = null,
+	int MaxInputTokens = int.MaxValue,
+	int? MaxOutputTokens = null);
 
 public sealed record AgentRunResult(
     Guid SessionId,
@@ -352,5 +389,6 @@ public enum AgentStopReason
 {
 	ModelStepLimit,
 	ToolCallLimit,
-	DurationLimit
+	DurationLimit,
+	ContextLimit
 }

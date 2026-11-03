@@ -35,6 +35,73 @@ public class AgentRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenInputEstimateExactlyMatchesBudget_RequestsModel()
+    {
+        var client = Client(Reply("Done."));
+        var runner = new AgentRunner(client, new ToolDispatcher([]), "Use tools.",
+            new AgentRunOptions(MaxInputTokens: 10),
+            inputTokenEstimator: new DelegateInputTokenEstimator((_, _) => 10));
+
+        AgentRunResult result = await runner.RunAsync(Guid.NewGuid(), "Question?", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Single(client.ReceivedRequests);
+    }
+
+    [Fact]
+    public async Task RunAsync_AppliesConfiguredOutputTokenLimitToModelRequest()
+    {
+        var client = Client(Reply("Done."));
+        var runner = new AgentRunner(client, new ToolDispatcher([]), "Use tools.",
+            new AgentRunOptions(MaxOutputTokens: 256),
+            inputTokenEstimator: new DelegateInputTokenEstimator((_, _) => 10));
+
+        AgentRunResult result = await runner.RunAsync(Guid.NewGuid(), "Question?", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(256, Assert.Single(client.ReceivedOptions)!.MaxOutputTokens);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenInitialInputExceedsBudget_DoesNotRequestModel()
+    {
+        var client = Client(Reply("Should not be requested."));
+        var runner = new AgentRunner(client, new ToolDispatcher([]), "Use tools.",
+            new AgentRunOptions(MaxInputTokens: 10),
+            inputTokenEstimator: new DelegateInputTokenEstimator((_, _) => 11));
+
+        AgentRunResult result = await runner.RunAsync(Guid.NewGuid(), "Question?", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.BudgetExceeded, result.Status);
+        Assert.Equal(AgentStopReason.ContextLimit, result.StopReason);
+        Assert.Equal(0, result.ModelStepCount);
+        Assert.Empty(client.ReceivedRequests);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenToolResultPushesNextStepOverBudget_StopsBeforeNextModelRequest()
+    {
+        int toolExecutions = 0;
+        AIFunction function = AIFunctionFactory.Create(() => $"result-{++toolExecutions}", "Lookup");
+        var client = Client(new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            [Call("lookup-1", "Lookup")])), Reply("Should not be requested."));
+        var estimator = new DelegateInputTokenEstimator((messages, _) =>
+            messages.Any(message => message.Role == ChatRole.Tool) ? 11 : 10);
+        var runner = new AgentRunner(client, new ToolDispatcher([function]), "Use tools.",
+            new AgentRunOptions(MaxInputTokens: 10), inputTokenEstimator: estimator);
+
+        AgentRunResult result = await runner.RunAsync(Guid.NewGuid(), "Question?", CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.BudgetExceeded, result.Status);
+        Assert.Equal(AgentStopReason.ContextLimit, result.StopReason);
+        Assert.Equal(1, result.ModelStepCount);
+        Assert.Equal(1, result.ToolCallCount);
+        Assert.Equal(1, toolExecutions);
+        Assert.Single(client.ReceivedRequests);
+        Assert.Equal(2, estimator.CallCount);
+    }
+
+    [Fact]
     public async Task RunAsync_WithPriorMessagesAndCommitCallback_PersistsCompleteToolExchangesAndFinalAnswer()
     {
         AIFunction function = AIFunctionFactory.Create((int value) => value * 2, "Double");
@@ -741,6 +808,18 @@ public class AgentRunnerTests
 
     private static FunctionResultContent[] ToolResults(FakeChatClient client) =>
         client.ReceivedRequests[1].Last().Contents.OfType<FunctionResultContent>().ToArray();
+
+    private sealed class DelegateInputTokenEstimator(
+        Func<IReadOnlyList<ChatMessage>, IReadOnlyList<AIFunction>, long> estimate) : IInputTokenEstimator
+    {
+        public int CallCount { get; private set; }
+
+        public long Estimate(IReadOnlyList<ChatMessage> messages, IReadOnlyList<AIFunction> tools)
+        {
+            CallCount++;
+            return estimate(messages, tools);
+        }
+    }
 
     private static JsonElement Envelope(FunctionResultContent result) =>
         JsonSerializer.SerializeToElement(result.Result, JsonSerializerOptions.Web);
