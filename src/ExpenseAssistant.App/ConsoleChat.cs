@@ -227,6 +227,7 @@ public sealed class ConsoleChat(IServiceScopeFactory scopeFactory)
 			AgentStopReason.ModelStepLimit => SessionRunStopReason.ModelStepLimit,
 			AgentStopReason.ToolCallLimit => SessionRunStopReason.ToolCallLimit,
 			AgentStopReason.DurationLimit => SessionRunStopReason.DurationLimit,
+			AgentStopReason.ContextLimit => SessionRunStopReason.ContextLimit,
 			_ => throw new ArgumentOutOfRangeException(nameof(result))
 		},
 		ModelStepCount = result.ModelStepCount,

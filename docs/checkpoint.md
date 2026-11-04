@@ -498,8 +498,9 @@ This follow-up supersedes the pending implementation items above without changin
 
 ### Remaining scope and next step
 
-- Context budgets, summary generation and automatic compaction remain pending.
-- Next: Module 5 Lab B Part 5. Add input-budget estimation and enforce it before every model request.
+- Summary generation, automatic compaction and `/context` diagnostics remain pending.
+- The tokenizer's local latency and estimate-versus-provider-usage calibration have not yet been measured on a near-budget request.
+- Next: benchmark and calibrate the Part 5 estimator, then implement Module 5 Lab B Part 6 summarization.
 
 ### Lab B Part 4 progress
 
@@ -508,3 +509,12 @@ This follow-up supersedes the pending implementation items above without changin
 - The message mapper reconstructs only complete matching tool-call/result exchanges. The builder rejects a summary boundary that splits a completed exchange.
 - The console now uses the builder before each run. Focused builder/console tests passed 11 tests; full regression suite passed 366 tests on 2026-11-03.
 - This is selection behavior only: no token budget, summary generation, automatic compaction or `/context` diagnostics are implemented yet.
+
+### Lab B Part 5 progress
+
+- Added `SharpToken` 2.0.6 with explicit `o200k_base` encoding, matching the GPT-5 family encoding documented by the package; the Azure deployment alias is not used to select the encoding.
+- The estimator counts every message's text, serialized tool arguments/results, tool names/descriptions/schemas, and fixed per-message/tool/request framing allowances. It is a conservative application estimate, not the provider's exact accounting.
+- `AgentRunner` checks the estimate immediately before each model request, including requests after tool results. The configured output reservation is sent as `ChatOptions.MaxOutputTokens`.
+- Requests over budget stop before dispatch with `BudgetExceeded`/`ContextLimit`; the console persists that stop reason. Estimates and provider-reported usage are available in model/run diagnostics for later calibration.
+- Focused estimator/runner/options/console tests passed; the full regression suite passed 380 tests on 2026-11-03.
+- A near-budget local latency benchmark and live estimate-versus-usage calibration remain pending. No automatic history trimming, truncation, or summary generation is performed.

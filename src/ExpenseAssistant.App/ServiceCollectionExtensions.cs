@@ -37,6 +37,8 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddSingleton<IInputTokenEstimator>(provider =>
+            new InputTokenEstimator(provider.GetRequiredService<AssistantOptions>().TokenizerEncoding));
         services.AddSingleton<ContextBuilder>();
         services.AddScoped(provider => new ToolDispatcher(provider.GetRequiredService<ExpenseTools>().CreateFunctions()));
         services.AddScoped(provider =>
@@ -44,8 +46,11 @@ public static class ServiceCollectionExtensions
             AssistantOptions options = provider.GetRequiredService<AssistantOptions>();
             return new AgentRunner(provider.GetRequiredService<IChatClient>(), provider.GetRequiredService<ToolDispatcher>(),
                 options.SystemPrompt,
-                new AgentRunOptions(MaxToolCalls: options.MaxToolCalls, MaxDuration: TimeSpan.FromSeconds(options.RequestTimeoutSeconds)),
-                provider.GetRequiredService<ILogger<AgentRunner>>());
+                new AgentRunOptions(MaxToolCalls: options.MaxToolCalls, MaxInputTokens: options.AvailableInputTokens,
+                    MaxOutputTokens: options.ReservedOutputTokens,
+                    MaxDuration: TimeSpan.FromSeconds(options.RequestTimeoutSeconds)),
+                provider.GetRequiredService<ILogger<AgentRunner>>(),
+                provider.GetRequiredService<IInputTokenEstimator>());
         });
         return services;
     }
