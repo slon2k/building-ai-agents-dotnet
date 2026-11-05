@@ -500,7 +500,7 @@ This follow-up supersedes the pending implementation items above without changin
 
 - Summary generation, automatic compaction and `/context` diagnostics remain pending.
 - The tokenizer's local latency and estimate-versus-provider-usage calibration have not yet been measured on a near-budget request.
-- Next: benchmark and calibrate the Part 5 estimator, then implement Module 5 Lab B Part 6 summarization.
+- Next: implement the production summarizer and wire it to a configurable trigger before a new run. Part 5 latency/calibration evidence remains an independent follow-up.
 
 ### Lab B Part 4 progress
 
@@ -518,3 +518,22 @@ This follow-up supersedes the pending implementation items above without changin
 - Requests over budget stop before dispatch with `BudgetExceeded`/`ContextLimit`; the console persists that stop reason. Estimates and provider-reported usage are available in model/run diagnostics for later calibration.
 - Focused estimator/runner/options/console tests passed; the full regression suite passed 380 tests on 2026-11-03.
 - A near-budget local latency benchmark and live estimate-versus-usage calibration remain pending. No automatic history trimming, truncation, or summary generation is performed.
+
+### Lab B Part 6, Part 1 progress
+
+- Added `ISessionStore.GetRunsAsync(sessionId)` with explicit session filtering and deterministic ordering.
+- Added `ConversationSummarySelector`, a deterministic policy that selects only a contiguous prefix of completed, ended runs after existing summary coverage and retains the requested number of newest completed runs.
+- Runs with incomplete/malformed tool exchanges, non-completed status, or unknown ownership stop selection; coverage never advances across them. Messages and runs from other sessions and summary boundaries that split a run are rejected.
+- Selector tests cover recent-run retention, continuation from existing coverage, interrupted-run blocking, tool-exchange integrity, and session isolation.
+- Focused store/selector/console tests passed 20 tests; full regression suite passed 386 tests on 2026-11-05.
+- No production summarizer/model call or automatic trigger is wired yet.
+
+### Lab B Part 6, Part 2 progress
+
+- Added `IConversationSummarizer` and `ConversationSummaryService`. The service loads session history, runs and existing summary, uses the selector, and invokes the summarizer only when there are eligible messages.
+- Successful nonblank output is saved with the selected coverage boundary, incremented version, model ID, prompt version and returned usage metadata.
+- Exceptions and blank output return a safe failure result without calling `SaveSummaryAsync`; tests verify the prior summary's text, version and coverage remain unchanged.
+- Tests also verify previous-summary input, exact selected message sequences, no-op behavior when nothing is eligible, and successful persistence through SQLite.
+- Focused summary-service tests passed 4 tests; full regression suite passed 390 tests on 2026-11-05.
+- The service is not yet registered or called by the console. Production prompt/model integration, automatic token threshold, and separate summarization usage diagnostics remain pending.
+- Next: implement the production summarizer with tools disabled, then wire a configurable trigger before starting a new session run.

@@ -24,6 +24,8 @@ public interface ISessionStore
 
     Task<SessionRun> StartRunAsync(Guid sessionId, Guid runId, CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<SessionRun>> GetRunsAsync(Guid sessionId, CancellationToken cancellationToken = default);
+
     Task<SessionRun> FinishRunAsync(SessionRun finishedRun, CancellationToken cancellationToken = default);
 
     Task<int> RecoverInterruptedRunsAsync(DateTimeOffset endedAt, CancellationToken cancellationToken = default);

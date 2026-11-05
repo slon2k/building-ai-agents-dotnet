@@ -221,6 +221,17 @@ public sealed class SessionStore(ExpenseDbContext context) : ISessionStore
         }
     }
 
+    public async Task<IReadOnlyList<SessionRun>> GetRunsAsync(
+        Guid sessionId, CancellationToken cancellationToken = default)
+    {
+        List<SessionRun> runs = await context.SessionRuns.AsNoTracking()
+            .Where(run => run.SessionId == sessionId)
+            .ToListAsync(cancellationToken);
+        return runs.OrderBy(run => run.StartedAt)
+            .ThenBy(run => run.RunId)
+            .ToArray();
+    }
+
     public async Task<SessionRun> FinishRunAsync(
         SessionRun finishedRun,
         CancellationToken cancellationToken = default)
