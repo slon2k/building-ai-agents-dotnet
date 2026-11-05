@@ -500,7 +500,7 @@ This follow-up supersedes the pending implementation items above without changin
 
 - Summary generation, automatic compaction and `/context` diagnostics remain pending.
 - The tokenizer's local latency and estimate-versus-provider-usage calibration have not yet been measured on a near-budget request.
-- Next: benchmark and calibrate the Part 5 estimator, then implement Module 5 Lab B Part 6 summarization.
+- Next: implement the fake-backed summarizer contract and failure/coverage tests. Part 5 latency/calibration evidence remains an independent follow-up.
 
 ### Lab B Part 4 progress
 
@@ -518,3 +518,12 @@ This follow-up supersedes the pending implementation items above without changin
 - Requests over budget stop before dispatch with `BudgetExceeded`/`ContextLimit`; the console persists that stop reason. Estimates and provider-reported usage are available in model/run diagnostics for later calibration.
 - Focused estimator/runner/options/console tests passed; the full regression suite passed 380 tests on 2026-11-03.
 - A near-budget local latency benchmark and live estimate-versus-usage calibration remain pending. No automatic history trimming, truncation, or summary generation is performed.
+
+### Lab B Part 6, Part 1 progress
+
+- Added `ISessionStore.GetRunsAsync(sessionId)` with explicit session filtering and deterministic ordering.
+- Added `ConversationSummarySelector`, a deterministic policy that selects only a contiguous prefix of completed, ended runs after existing summary coverage and retains the requested number of newest completed runs.
+- Runs with incomplete/malformed tool exchanges, non-completed status, or unknown ownership stop selection; coverage never advances across them. Messages and runs from other sessions and summary boundaries that split a run are rejected.
+- Selector tests cover recent-run retention, continuation from existing coverage, interrupted-run blocking, tool-exchange integrity, and session isolation.
+- Focused store/selector/console tests passed 20 tests; full regression suite passed 386 tests on 2026-11-05.
+- No summarizer/model call or automatic trigger is wired yet. Next: define the fakeable summarizer contract and test that failed generation leaves summary content/version/coverage unchanged.

@@ -596,6 +596,14 @@ public class ConsoleChatTests
             return Task.FromResult(run);
         }
 
+        public Task<IReadOnlyList<SessionRun>> GetRunsAsync(Guid sessionId, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IReadOnlyList<SessionRun> result = runs.Where(run => run.SessionId == sessionId)
+                .OrderBy(run => run.StartedAt).ThenBy(run => run.RunId).ToArray();
+            return Task.FromResult(result);
+        }
+
         public Task<SessionRun> FinishRunAsync(SessionRun finishedRun, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();

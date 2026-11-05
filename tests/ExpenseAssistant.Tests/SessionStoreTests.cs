@@ -83,6 +83,24 @@ public class SessionStoreTests
     }
 
     [Fact]
+    public async Task GetRunsAsync_ReturnsOnlySessionRunsInStartOrder()
+    {
+        await using var context = CreateContext();
+        var store = new SessionStore(context);
+        Session first = await store.CreateSessionAsync("First");
+        Session second = await store.CreateSessionAsync("Second");
+        SessionRun firstRun = await store.StartRunAsync(first.SessionId, Guid.NewGuid());
+        SessionRun secondRun = await store.StartRunAsync(second.SessionId, Guid.NewGuid());
+
+        IReadOnlyList<SessionRun> runs = await store.GetRunsAsync(first.SessionId);
+
+        Assert.Equal(firstRun.RunId, Assert.Single(runs).RunId);
+        Assert.Empty(await store.GetRunsAsync(Guid.NewGuid()));
+        Assert.DoesNotContain(await store.GetRunsAsync(second.SessionId), run => run.RunId == firstRun.RunId);
+        Assert.Contains(await store.GetRunsAsync(second.SessionId), run => run.RunId == secondRun.RunId);
+    }
+
+    [Fact]
     public async Task RecoverInterruptedRunsAsync_MarksEveryRunningRunInterrupted()
     {
         await using var context = CreateContext();
